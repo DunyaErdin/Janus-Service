@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+from functools import lru_cache
+
+from app.application.orchestrators.conversation_orchestrator import ConversationOrchestrator
+from app.application.services.fallback_response_service import FallbackResponseService
+from app.application.services.prompt_builder import PromptBuilder
+from app.application.services.response_validator import ResponseValidator
+from app.application.services.touch_interpreter import TouchInterpreter
+from app.config import get_settings
+from app.domain.ports.llm_port import LlmPort
+from app.domain.ports.session_repository_port import DeviceSessionRepositoryPort
+from app.domain.ports.stt_port import SttPort
+from app.domain.ports.telemetry_port import TelemetryPort
+from app.domain.ports.tts_port import TtsPort
+from app.infrastructure.adapters.llm.gemini_llm_adapter import GeminiLlmAdapter
+from app.infrastructure.adapters.llm.mock_llm_adapter import MockLlmAdapter
+from app.infrastructure.adapters.repositories.in_memory_session_repository import (
+    InMemorySessionRepository,
+)
+from app.infrastructure.adapters.stt.placeholder_stt_adapter import PlaceholderSttAdapter
+from app.infrastructure.adapters.telemetry.json_logger_telemetry_adapter import (
+    JsonLoggerTelemetryAdapter,
+)
+from app.infrastructure.adapters.tts.placeholder_tts_adapter import PlaceholderTtsAdapter
+from app.infrastructure.transport.websocket.connection_manager import ConnectionManager
+
+
+@lru_cache
+def get_connection_manager() -> ConnectionManager:
+    return ConnectionManager()
+
+
+@lru_cache
+def get_session_repository() -> DeviceSessionRepositoryPort:
+    return InMemorySessionRepository()
+
+
+@lru_cache
+def get_telemetry_adapter() -> TelemetryPort:
+    return JsonLoggerTelemetryAdapter()
+
+
+@lru_cache
+def get_touch_interpreter() -> TouchInterpreter:
+    return TouchInterpreter()
+
+
+@lru_cache
+def get_prompt_builder() -> PromptBuilder:
+    settings = get_settings()
+    return PromptBuilder(
+        robot_name=settings.robot_name,
+        default_language=settings.default_language,
+    )
+
+
+@lru_cache
+def get_response_validator() -> ResponseValidator:
+    return ResponseValidator()
+
+
+@lru_cache
+def get_fallback_response_service() -> FallbackResponseService:
+    return FallbackResponseService()
+
+
+@lru_cache
+def get_llm_adapter() -> LlmPort:
+    settings = get_settings()
+    if settings.llm_provider == "gemini":
+        return GeminiLlmAdapter(
+            api_key=settings.gemini_api_key,
+            model_id=settings.gemini_model_id,
+            request_timeout_seconds=settings.request_timeout_seconds,
+        )
+    return MockLlmAdapter()
+
+
+@lru_cache
+def get_stt_adapter() -> SttPort:
+    return PlaceholderSttAdapter()
+
+
+@lru_cache
+def get_tts_adapter() -> TtsPort:
+    return PlaceholderTtsAdapter()
+
+
+@lru_cache
+def get_conversation_orchestrator() -> ConversationOrchestrator:
+    settings = get_settings()
+    return ConversationOrchestrator(
+        llm=get_llm_adapter(),
+        stt=get_stt_adapter(),
+        tts=get_tts_adapter(),
+        session_repository=get_session_repository(),
+        telemetry=get_telemetry_adapter(),
+        prompt_builder=get_prompt_builder(),
+        touch_interpreter=get_touch_interpreter(),
+        response_validator=get_response_validator(),
+        fallback_response_service=get_fallback_response_service(),
+        max_audio_chunks_per_session=settings.max_audio_chunks_per_session,
+        session_history_limit=settings.session_history_limit,
+    )
+
