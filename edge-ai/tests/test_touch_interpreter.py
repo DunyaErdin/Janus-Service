@@ -7,7 +7,7 @@ from app.domain.models.touch_context import (
 )
 
 
-def test_short_pet_touch_maps_to_affection() -> None:
+def test_short_pet_touch_maps_to_petting() -> None:
     interpreter = TouchInterpreter()
     interpreted = interpreter.interpret(
         TouchContext(
@@ -18,10 +18,10 @@ def test_short_pet_touch_maps_to_affection() -> None:
         )
     )
 
-    assert interpreted.interpreted_as == TouchInterpretation.AFFECTION
+    assert interpreted.interpreted_as == TouchInterpretation.PETTING
 
 
-def test_repeated_pet_touch_maps_to_playful_engagement() -> None:
+def test_repeated_pet_touch_maps_to_affection() -> None:
     interpreter = TouchInterpreter()
     interpreted = interpreter.interpret(
         TouchContext(
@@ -32,7 +32,7 @@ def test_repeated_pet_touch_maps_to_playful_engagement() -> None:
         )
     )
 
-    assert interpreted.interpreted_as == TouchInterpretation.PLAYFUL_ENGAGEMENT
+    assert interpreted.interpreted_as == TouchInterpretation.AFFECTION
 
 
 def test_record_press_maps_to_explicit_listen_request() -> None:
@@ -58,4 +58,3 @@ def test_unknown_signal_stays_unknown() -> None:
     )
 
     assert interpreted.interpreted_as == TouchInterpretation.UNKNOWN
-

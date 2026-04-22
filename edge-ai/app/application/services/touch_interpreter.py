@@ -17,15 +17,15 @@ class TouchInterpreter:
             TouchGesture.HOLD,
         }:
             interpretation = TouchInterpretation.EXPLICIT_LISTEN_REQUEST
-        elif touch.sensor == RawTouchSensor.PETTING_SURFACE and touch.repeat_count >= 3:
-            interpretation = TouchInterpretation.PLAYFUL_ENGAGEMENT
         elif touch.sensor == RawTouchSensor.PETTING_SURFACE and touch.gesture in {
             TouchGesture.STROKE,
             TouchGesture.TAP,
         }:
-            interpretation = TouchInterpretation.AFFECTION
+            if touch.repeat_count >= 3 or (touch.duration_ms or 0) >= 1500:
+                interpretation = TouchInterpretation.AFFECTION
+            else:
+                interpretation = TouchInterpretation.PETTING
         elif touch.sensor == RawTouchSensor.PETTING_SURFACE and touch.gesture == TouchGesture.PRESS:
-            interpretation = TouchInterpretation.ATTENTION
+            interpretation = TouchInterpretation.ATTENTION_REQUEST
 
         return touch.model_copy(update={"interpreted_as": interpretation})
-

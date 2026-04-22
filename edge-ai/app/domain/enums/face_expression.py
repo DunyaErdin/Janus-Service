@@ -10,4 +10,5 @@ class FaceExpression(str, Enum):
     SURPRISED = "surprised"
     SLEEPY = "sleepy"
     THINKING = "thinking"
-
+    HAPPY_EYES = "happy_eyes"
+    SAD_EYES = "sad_eyes"

@@ -28,7 +28,11 @@ from app.infrastructure.transport.websocket.connection_manager import Connection
 
 @lru_cache
 def get_connection_manager() -> ConnectionManager:
-    return ConnectionManager()
+    settings = get_settings()
+    return ConnectionManager(
+        stale_after_seconds=settings.websocket_receive_timeout_seconds,
+        close_timeout_seconds=settings.websocket_close_timeout_seconds,
+    )
 
 
 @lru_cache
@@ -103,4 +107,3 @@ def get_conversation_orchestrator() -> ConversationOrchestrator:
         max_audio_chunks_per_session=settings.max_audio_chunks_per_session,
         session_history_limit=settings.session_history_limit,
     )
-

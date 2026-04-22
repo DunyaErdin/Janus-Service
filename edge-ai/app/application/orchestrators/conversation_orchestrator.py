@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -143,10 +144,11 @@ class ConversationOrchestrator:
                     session=session,
                     latest_touch=interpreted_touch,
                     transcript_text=None,
-                )
-                session.conversation_history = self._append_turn(
-                    session.conversation_history,
-                    ConversationTurn(role="assistant", text=response_plan.spoken_text),
+                    interaction_mode=(
+                        "listening"
+                        if interpreted_touch.interpreted_as == TouchInterpretation.EXPLICIT_LISTEN_REQUEST
+                        else "replying"
+                    ),
                 )
                 ack_message = "touch_processed"
             elif isinstance(event, AudioChunkEvent):
@@ -162,10 +164,7 @@ class ConversationOrchestrator:
                         session=session,
                         latest_touch=session.last_touch,
                         transcript_text=transcript,
-                    )
-                    session.conversation_history = self._append_turn(
-                        session.conversation_history,
-                        ConversationTurn(role="assistant", text=response_plan.spoken_text),
+                        interaction_mode="replying",
                     )
                     session.audio_buffer = AudioBufferState()
                     ack_message = "audio_finalized"
@@ -173,22 +172,31 @@ class ConversationOrchestrator:
             error_category = "response_validation"
             provider_used = self._llm.provider_name
             response_plan = self._fallback_response_service.build(
-                touch_interpretation=self._safe_touch_value(session.last_touch)
+                touch_interpretation=self._safe_touch_value(session.last_touch),
+                reason="processing_failure",
             )
         except (ProviderUnavailableError, ProviderInvocationError):
             error_category = "provider_failure"
             provider_used = self._llm.provider_name
             response_plan = self._fallback_response_service.build(
-                touch_interpretation=self._safe_touch_value(session.last_touch)
+                touch_interpretation=self._safe_touch_value(session.last_touch),
+                reason="processing_failure",
             )
         except Exception:
             error_category = "orchestrator_unhandled_error"
             response_plan = self._fallback_response_service.build(
-                touch_interpretation=self._safe_touch_value(session.last_touch)
+                touch_interpretation=self._safe_touch_value(session.last_touch),
+                reason="processing_failure",
             )
 
         if isinstance(event, AudioChunkEvent) and event.is_final:
             session.audio_buffer = AudioBufferState()
+
+        if response_plan is not None and self._is_response_event(event):
+            session.conversation_history = self._append_assistant_turn_if_needed(
+                session.conversation_history,
+                response_plan.spoken_text,
+            )
 
         await self._session_repository.save(session)
         await self._telemetry.publish(
@@ -268,11 +276,26 @@ class ConversationOrchestrator:
         session: DeviceSessionContext,
         latest_touch: TouchContext | None,
         transcript_text: str | None,
+        interaction_mode: Literal["idle", "listening", "replying"],
     ) -> tuple[AIResponsePlan, str]:
+        if transcript_text is not None and not transcript_text.strip():
+            return (
+                self._fallback_response_service.build(
+                    touch_interpretation=self._safe_touch_value(latest_touch),
+                    reason="unclear_input",
+                ),
+                "fallback",
+            )
+
         prompt = self._prompt_builder.build(
-            session=session,
-            latest_touch=latest_touch,
-            transcript_text=transcript_text,
+            device_id=session.device_id,
+            session_id=session.session_id,
+            language=None,
+            interaction_mode=interaction_mode,
+            device_state=session.latest_status,
+            touch_context=latest_touch,
+            conversation_summary=self._summarize_conversation(session.conversation_history),
+            latest_user_utterance=transcript_text,
         )
         candidate_plan = await self._llm.generate_response(prompt)
         validated_plan = self._response_validator.validate(candidate_plan)
@@ -308,7 +331,34 @@ class ConversationOrchestrator:
     ) -> list[ConversationTurn]:
         return (turns + [new_turn])[-self._session_history_limit :]
 
+    def _append_assistant_turn_if_needed(
+        self,
+        turns: list[ConversationTurn],
+        spoken_text: str,
+    ) -> list[ConversationTurn]:
+        if turns and turns[-1].role == "assistant" and turns[-1].text == spoken_text:
+            return turns
+        return self._append_turn(
+            turns,
+            ConversationTurn(role="assistant", text=spoken_text),
+        )
+
+    def _summarize_conversation(self, turns: list[ConversationTurn]) -> str:
+        if not turns:
+            return ""
+
+        recent_turns = turns[-4:]
+        return " | ".join(
+            f"{turn.role}: {turn.text}"
+            for turn in recent_turns
+        )
+
+    def _is_response_event(self, event: DeviceEvent) -> bool:
+        return isinstance(event, TouchEvent) or (
+            isinstance(event, AudioChunkEvent) and event.is_final
+        )
+
     def _safe_touch_value(self, touch: TouchContext | None) -> TouchInterpretation:
         if touch is None:
-            return TouchInterpretation.UNKNOWN
+            return TouchInterpretation.NONE
         return touch.interpreted_as

@@ -22,10 +22,11 @@ class TouchGesture(str, Enum):
 
 
 class TouchInterpretation(str, Enum):
+    NONE = "none"
+    PETTING = "petting"
     UNKNOWN = "unknown"
     AFFECTION = "affection"
-    ATTENTION = "attention"
-    PLAYFUL_ENGAGEMENT = "playful_engagement"
+    ATTENTION_REQUEST = "attention_request"
     EXPLICIT_LISTEN_REQUEST = "explicit_listen_request"
 
 
@@ -37,4 +38,3 @@ class TouchContext(BaseModel):
     intensity: float | None = Field(default=None, ge=0.0, le=1.0)
     interpreted_as: TouchInterpretation = TouchInterpretation.UNKNOWN
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-

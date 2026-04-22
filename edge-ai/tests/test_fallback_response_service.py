@@ -12,10 +12,9 @@ def test_fallback_response_is_safe_and_structured() -> None:
         touch_interpretation=TouchInterpretation.EXPLICIT_LISTEN_REQUEST
     )
 
-    assert plan.spoken_text == "Şu anda seni anladım ama cevap oluştururken bir sorun yaşadım."
-    assert plan.emotion == Emotion.NEUTRAL
+    assert plan.spoken_text == "Seni duydum ama şu an küçük bir sorun yaşadım."
+    assert plan.emotion == Emotion.THINKING
     assert plan.face_expression == FaceExpression.THINKING
     assert plan.voice_style == VoiceStyle.CALM
     assert plan.touch_interpretation == TouchInterpretation.EXPLICIT_LISTEN_REQUEST
     assert plan.actions == []
-

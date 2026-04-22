@@ -73,7 +73,10 @@ class AckMessage(MessageBase):
     message_type: Literal["ack"] = "ack"
     device_id: str | None = Field(default=None, max_length=128)
     session_id: str | None = Field(default=None, max_length=128)
+    ack_for: str = Field(min_length=1, max_length=64)
+    accepted: bool = True
     message: str = Field(min_length=1, max_length=128)
+    server_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class AIResponsePlanMessage(MessageBase):
@@ -81,6 +84,7 @@ class AIResponsePlanMessage(MessageBase):
     device_id: str = Field(min_length=1, max_length=128)
     session_id: str = Field(min_length=1, max_length=128)
     response_plan: AIResponsePlan
+    server_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ErrorMessage(MessageBase):
@@ -89,6 +93,7 @@ class ErrorMessage(MessageBase):
     code: str = Field(min_length=1, max_length=128)
     message: str = Field(min_length=1, max_length=240)
     retryable: bool = False
+    server_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 IncomingDeviceMessage = Annotated[
@@ -108,4 +113,3 @@ OutgoingDeviceMessage = Annotated[
     Union[AckMessage, AIResponsePlanMessage, ErrorMessage],
     Field(discriminator="message_type"),
 ]
-

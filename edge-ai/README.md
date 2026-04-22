@@ -1,143 +1,271 @@
 # Janus Edge AI Service
 
-Production-oriented Python edge orchestration service for a home assistant robot system. This service does not own low-level hardware. It accepts typed device events from the ESP runtime, maintains session context, interprets touch input semantically, coordinates placeholder speech/LLM/TTS providers, validates every outbound response plan, and returns only high-level semantic intents.
+Production-oriented Python edge orchestration service for a home assistant robot system. This service does not own low-level hardware. It accepts typed device events from the ESP32-S3 runtime, maintains per-device session context, interprets touch input semantically, builds constrained LLM prompts, validates every outbound response plan, and returns only high-level semantic intents to the device runtime.
 
-## Architectural Intent
+## Current System Summary
 
-- FastAPI app shell with a dedicated WebSocket transport for ESP connectivity
-- Hexagonal architecture with explicit ports and adapters
-- Strict Pydantic contracts for device protocol and AI response plans
-- Thin transport layer, business flow centered in `ConversationOrchestrator`
-- Safe fallback behavior whenever STT, LLM, TTS, or schema validation fails
-- Provider boundaries that keep Gemini integration replaceable in the future
+- Firmware boundary:
+  The ESP32-S3 firmware owns microphone capture, speaker playback, face rendering, touch sensing, motor control, and real-time safety state.
+- Edge AI boundary:
+  This Python service owns device sessions, touch interpretation, prompt assembly, LLM orchestration, response validation, fallback behavior, and high-level response planning.
+- WebSocket transport role:
+  The ESP connects as a client over WebSocket, sends typed runtime events, receives typed `ack`, `error`, and `ai_response_plan` messages, and reconnects cleanly when needed.
+- Prompt system role:
+  The prompt builder assembles system prompt, developer constraints, dynamic runtime context, strict output instructions, and JSON schema for the active LLM adapter.
+- Validation and fallback role:
+  Raw provider output is parsed into a strict schema, semantically validated, and replaced with a safe fallback plan when output is malformed or unsafe.
+- Current placeholders:
+  Real STT, real TTS synthesis dispatch, persistent session storage, external telemetry export, and stronger device authentication are still placeholder or phase-2 work.
 
-## Current Scope
+## What The Service Does
 
-Implemented:
+- Accepts WebSocket connections from ESP devices
+- Requires a `hello` message before any other device event
+- Tracks one active connection per `device_id`
+- Replaces stale or duplicate connections cleanly
+- Maintains in-memory session state per connected device
+- Interprets raw touch events into semantic touch meaning
+- Builds structured LLM prompts from runtime context
+- Validates every AI response plan before dispatch
+- Returns only semantic robot plans such as spoken text, emotion, face expression, voice style, and high-level actions
 
-- WebSocket endpoint for typed device messages
-- Session lifecycle and in-memory session repository
-- Semantic touch interpretation service
-- Prompt builder with persona, enum constraints, and safety rules
-- Mock LLM adapter that returns valid structured plans without external calls
-- Placeholder Gemini, STT, and TTS adapters behind stable ports
-- Response validation to prevent unsafe or low-level action emission
-- JSON telemetry adapter for structured logs
+## Architecture
 
-Placeholders:
+- FastAPI app shell
+- Hexagonal structure with ports and adapters
+- Thin WebSocket route
+- Conversation orchestration in `ConversationOrchestrator`
+- Prompt assembly in `PromptBuilder`
+- Structured JSON schema parsing for LLM output
+- Semantic validation and safe fallback services
+- Provider boundary through `LlmPort`, `SttPort`, `TtsPort`, `TelemetryPort`, and `DeviceSessionRepositoryPort`
 
-- Real STT transcription
-- Real TTS synthesis or audio artifact dispatch
-- Real Gemini transport and response parsing
-- Authentication and device identity verification
-- Persistent session storage
-- External telemetry export
+## ESP Connectivity Contract
 
-## Layout
+The ESP runtime connects as a WebSocket client to:
 
-```text
-edge-ai/
-  pyproject.toml
-  README.md
-  .env.example
-  app/
-    main.py
-    config.py
-    dependencies.py
-    api/
-      websocket_routes.py
-    application/
-      orchestrators/
-        conversation_orchestrator.py
-      services/
-        fallback_response_service.py
-        prompt_builder.py
-        response_validator.py
-        touch_interpreter.py
-    domain/
-      enums/
-        action_type.py
-        emotion.py
-        face_expression.py
-        voice_style.py
-      models/
-        ai_response_plan.py
-        device_event.py
-        session_context.py
-        touch_context.py
-      ports/
-        llm_port.py
-        provider_errors.py
-        session_repository_port.py
-        stt_port.py
-        telemetry_port.py
-        tts_port.py
-    infrastructure/
-      adapters/
-        llm/
-          gemini_llm_adapter.py
-          mock_llm_adapter.py
-        repositories/
-          in_memory_session_repository.py
-        stt/
-          placeholder_stt_adapter.py
-        telemetry/
-          json_logger_telemetry_adapter.py
-        tts/
-          placeholder_tts_adapter.py
-      transport/
-        websocket/
-          connection_manager.py
-          protocol.py
-    schemas/
-      llm_response_schema.py
-      websocket_messages.py
-  tests/
-    test_fallback_response_service.py
-    test_response_validator.py
-    test_touch_interpreter.py
+- `ws://<host>:<port>/ws/device`
+- `wss://<host>:<port>/ws/device` when deployed behind TLS or a reverse proxy
+
+Expected device behavior:
+
+1. Open the WebSocket connection.
+2. Send `hello` as the first message.
+3. Keep using the same `device_id` for the lifetime of that connection.
+4. Send `heartbeat` regularly. Any valid message also counts as activity.
+5. Optionally send `session_start` and `session_end` to make the interaction lifecycle explicit.
+6. Reconnect using the same `device_id` if the socket closes. The server will replace the older connection safely.
+
+Minimal incoming `hello` example:
+
+```json
+{
+  "message_type": "hello",
+  "device_id": "janus-esp-01",
+  "protocol_version": "1.0",
+  "firmware_version": "0.2.0",
+  "capabilities": ["audio_in", "audio_out", "touch", "face_display"]
+}
 ```
 
-## Protocol Notes
+Minimal incoming `heartbeat` example:
 
-Incoming WebSocket messages are discriminated by `message_type` and include:
+```json
+{
+  "message_type": "heartbeat",
+  "device_id": "janus-esp-01",
+  "sequence": 42
+}
+```
 
-- `hello`
-- `heartbeat`
-- `touch_event`
-- `audio_chunk`
-- `session_start`
-- `session_end`
-- `status`
+Outgoing `ack` example:
 
-Outgoing WebSocket messages include:
+```json
+{
+  "message_type": "ack",
+  "device_id": "janus-esp-01",
+  "session_id": "8af7f654-2f07-4a40-a4d2-6271f98bd2f0",
+  "ack_for": "touch_event",
+  "accepted": true,
+  "message": "touch_processed",
+  "server_time": "2026-04-22T12:00:00Z"
+}
+```
 
-- `ack`
-- `ai_response_plan`
-- `error`
+Outgoing `error` example:
 
-The canonical response contract is `AIResponsePlan`, which always includes:
+```json
+{
+  "message_type": "error",
+  "device_id": "janus-esp-01",
+  "code": "protocol.invalid_message",
+  "message": "Incoming websocket message failed schema validation.",
+  "retryable": false,
+  "server_time": "2026-04-22T12:00:00Z"
+}
+```
 
-- `spoken_text`
-- `emotion`
-- `face_expression`
-- `voice_style`
-- `touch_interpretation`
-- `actions`
+Notes:
 
-## Provider Swappability
+- The first message must be `hello`, otherwise the server returns an error and closes the connection.
+- If `EDGE_AI_ALLOWED_DEVICE_IDS` is configured, only listed device IDs may connect.
+- If the ESP reconnects with the same `device_id`, the older connection is closed and replaced.
+- This edge service never sends low-level hardware instructions. It only sends semantic response plans.
 
-The orchestration layer depends only on ports:
+## Environment Variables
 
-- `LlmPort`
-- `SttPort`
-- `TtsPort`
-- `DeviceSessionRepositoryPort`
-- `TelemetryPort`
+These are the currently used runtime settings:
 
-That means Gemini-specific logic can be completed or replaced later without touching the WebSocket handler, touch interpretation, response validation, or session orchestration flow.
+- `EDGE_AI_APP_NAME`
+- `EDGE_AI_ENVIRONMENT`
+- `EDGE_AI_LOG_LEVEL`
+- `EDGE_AI_LOG_JSON`
+- `EDGE_AI_SERVER_HOST`
+- `EDGE_AI_SERVER_PORT`
+- `EDGE_AI_PROXY_HEADERS`
+- `EDGE_AI_FORWARDED_ALLOW_IPS`
+- `EDGE_AI_ROBOT_NAME`
+- `EDGE_AI_DEFAULT_LANGUAGE`
+- `EDGE_AI_WEBSOCKET_PATH`
+- `EDGE_AI_ALLOWED_DEVICE_IDS`
+- `EDGE_AI_LLM_PROVIDER`
+- `EDGE_AI_GEMINI_API_KEY`
+- `EDGE_AI_GEMINI_MODEL_ID`
+- `EDGE_AI_REQUEST_TIMEOUT_SECONDS`
+- `EDGE_AI_MAX_AUDIO_CHUNKS_PER_SESSION`
+- `EDGE_AI_SESSION_HISTORY_LIMIT`
+- `EDGE_AI_WEBSOCKET_HELLO_TIMEOUT_SECONDS`
+- `EDGE_AI_WEBSOCKET_RECEIVE_TIMEOUT_SECONDS`
+- `EDGE_AI_WEBSOCKET_CLOSE_TIMEOUT_SECONDS`
+- `EDGE_AI_WEBSOCKET_MAX_PROTOCOL_ERRORS`
+- `EDGE_AI_WEBSOCKET_MAX_MESSAGE_BYTES`
+- `EDGE_AI_WEBSOCKET_PING_INTERVAL_SECONDS`
+- `EDGE_AI_WEBSOCKET_PING_TIMEOUT_SECONDS`
 
-## Notes For The Gemini Migration
+Use `.env.example` as the baseline. Do not commit real secrets.
+Create a local `.env` from `.env.example` before starting the service.
 
-`GeminiLlmAdapter` is included intentionally as a fail-fast scaffold. The rest of the service is already structured so a completed Gemini adapter can be dropped in behind `LlmPort` and selected via configuration. If you later move from Gemini to OpenAI, Anthropic, local vLLM, or another gateway, the swap should stay localized to the adapter and dependency wiring.
+## Development Run
 
+This service is currently safest as a single-process deployment because:
+
+- the session repository is in-memory
+- the connection manager is in-process
+
+Recommended development startup:
+
+1. Copy `.env.example` to `.env`.
+2. Adjust values as needed for your device and provider.
+3. Start the service:
+
+```bash
+cd edge-ai
+python -m app.server
+```
+
+Alternative entrypoint after installation:
+
+```bash
+cd edge-ai
+janus-edge-ai
+```
+
+Health endpoint:
+
+```text
+GET /health
+```
+
+## Docker Deployment
+
+Build the image:
+
+```bash
+cd edge-ai
+docker build -t janus-edge-ai:latest .
+```
+
+Run the container:
+
+```bash
+docker run --rm \
+  --name janus-edge-ai \
+  --env-file .env \
+  -p 8080:8080 \
+  janus-edge-ai:latest
+```
+
+Or use Compose:
+
+```bash
+cd edge-ai
+docker compose up -d --build
+```
+
+Container notes:
+
+- Runs as a non-root user
+- Uses environment-driven config only
+- Exposes port `8080` by default
+- Keeps Uvicorn on a single worker intentionally so in-memory device/session state stays consistent
+
+Production mode recommendation:
+
+- Set `EDGE_AI_ENVIRONMENT=production`
+- Keep `EDGE_AI_LOG_JSON=true`
+- Place the service behind a reverse proxy if exposing it beyond a private LAN
+- Treat `.env` as a deployment secret file and never bake secrets into the image
+
+## Reverse Proxy Note
+
+For a VPS, mini PC, or gateway deployment, prefer:
+
+- TLS termination at a reverse proxy such as Caddy or Nginx
+- `wss://` between ESP and public endpoint when traffic leaves the private LAN
+- proxying `/ws/device` directly to this FastAPI service
+
+This service does not enable browser CORS middleware by default because the primary client is the ESP device, not a browser app.
+
+## Logging And Observability
+
+The service emits structured logs useful for production debugging. Important fields include:
+
+- `device_id`
+- `session_id`
+- `event_type`
+- `provider`
+- `orchestrator_phase`
+- `error_category`
+
+Telemetry logging redacts common secret-shaped keys such as token, secret, authorization, and api_key fields.
+
+## Production-Ready Now
+
+- Single-process FastAPI service startup
+- Docker image and Compose example
+- Environment-driven configuration
+- Structured JSON logging
+- Explicit ESP connection contract
+- Required `hello` handshake
+- Per-device connection replacement on reconnect
+- Receive timeout and stale connection cleanup
+- Typed ack and error responses
+- Safe fallback behavior on orchestration or provider failure
+
+## Placeholder Or Not Yet Complete
+
+- Real STT transcription provider
+- Real TTS generation and playback artifact delivery
+- Fully validated Gemini production rollout under real traffic
+- Persistent session repository for multi-process or multi-instance deployment
+- External metrics or tracing backend
+- Strong WebSocket authentication beyond optional device allowlisting
+
+## Phase 2
+
+- Add persistent session and device repository
+- Add proper WebSocket authentication and device provisioning
+- Add distributed connection coordination if scaling beyond one worker
+- Add real STT and TTS provider adapters
+- Add external telemetry export such as OpenTelemetry, Loki, or ELK
+- Add rollout-safe provider retry and circuit breaker policies

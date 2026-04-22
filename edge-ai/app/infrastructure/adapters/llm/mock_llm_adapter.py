@@ -13,11 +13,11 @@ class MockLlmAdapter(LlmPort):
     provider_name = "mock_llm"
 
     async def generate_response(self, prompt: LlmPromptInput) -> AIResponsePlan:
-        transcript = str(prompt.context.get("transcript_text") or "").strip()
+        transcript = str(prompt.runtime_context.latest_user_utterance or "").strip()
         raw_touch = str(
-            prompt.context.get(
-                "touch_interpretation",
-                TouchInterpretation.UNKNOWN.value,
+            prompt.runtime_context.touch_context.get(
+                "semantic_label",
+                TouchInterpretation.NONE.value,
             )
         )
         try:
@@ -27,67 +27,62 @@ class MockLlmAdapter(LlmPort):
 
         if transcript:
             return AIResponsePlan(
-                spoken_text="Seni duydum. Birazdan yardımcı olacağım.",
+                spoken_text="Seni duydum. Yardımcı olayım.",
                 emotion=Emotion.CURIOUS,
                 face_expression=FaceExpression.LISTENING,
                 voice_style=VoiceStyle.WARM,
                 touch_interpretation=touch,
                 actions=[
                     DeviceAction(type=ActionType.FACE, value=FaceExpression.LISTENING.value),
-                    DeviceAction(type=ActionType.SOUND, value="ack_chime"),
+                    DeviceAction(type=ActionType.SOUND, value="soft_ack"),
                 ],
             )
 
         if touch == TouchInterpretation.EXPLICIT_LISTEN_REQUEST:
             return AIResponsePlan(
-                spoken_text="Seni dinlemeye hazırım.",
-                emotion=Emotion.CURIOUS,
+                spoken_text="Hazırım, seni dinliyorum.",
+                emotion=Emotion.LISTENING,
                 face_expression=FaceExpression.LISTENING,
-                voice_style=VoiceStyle.CALM,
+                voice_style=VoiceStyle.SOFT,
                 touch_interpretation=touch,
                 actions=[
-                    DeviceAction(type=ActionType.FACE, value=FaceExpression.LISTENING.value),
-                    DeviceAction(type=ActionType.SOUND, value="listen_chime"),
-                    DeviceAction(type=ActionType.LED, value="listen_glow"),
-                ],
-            )
-
-        if touch == TouchInterpretation.PLAYFUL_ENGAGEMENT:
-            return AIResponsePlan(
-                spoken_text="Buradayım. Birlikte biraz eğlenebiliriz.",
-                emotion=Emotion.HAPPY,
-                face_expression=FaceExpression.WINK,
-                voice_style=VoiceStyle.ENERGETIC,
-                touch_interpretation=touch,
-                actions=[
-                    DeviceAction(type=ActionType.FACE, value=FaceExpression.WINK.value),
-                    DeviceAction(type=ActionType.GESTURE, value="wave"),
+                    DeviceAction(type=ActionType.SOUND, value="listen_beep"),
                 ],
             )
 
         if touch == TouchInterpretation.AFFECTION:
             return AIResponsePlan(
-                spoken_text="Ben de seni fark ettim.",
-                emotion=Emotion.HAPPY,
+                spoken_text="Canım, buradayım. Seni sevgiyle dinliyorum.",
+                emotion=Emotion.AFFECTIONATE,
                 face_expression=FaceExpression.SMILE,
                 voice_style=VoiceStyle.WARM,
                 touch_interpretation=touch,
                 actions=[
                     DeviceAction(type=ActionType.FACE, value=FaceExpression.SMILE.value),
-                    DeviceAction(type=ActionType.LED, value="warm_pulse"),
                 ],
             )
 
-        if touch == TouchInterpretation.ATTENTION:
+        if touch == TouchInterpretation.PETTING:
             return AIResponsePlan(
-                spoken_text="Buradayım, seni dinliyorum.",
-                emotion=Emotion.THINKING,
-                face_expression=FaceExpression.THINKING,
+                spoken_text="Buradayım. Bu nazik dokunuşunu fark ettim.",
+                emotion=Emotion.AFFECTIONATE,
+                face_expression=FaceExpression.HAPPY_EYES,
                 voice_style=VoiceStyle.SOFT,
                 touch_interpretation=touch,
                 actions=[
-                    DeviceAction(type=ActionType.FACE, value=FaceExpression.THINKING.value),
-                    DeviceAction(type=ActionType.MOTION, value="orient_to_user"),
+                    DeviceAction(type=ActionType.FACE, value=FaceExpression.HAPPY_EYES.value),
+                ],
+            )
+
+        if touch == TouchInterpretation.ATTENTION_REQUEST:
+            return AIResponsePlan(
+                spoken_text="Buradayım, seni dikkatle dinliyorum.",
+                emotion=Emotion.LISTENING,
+                face_expression=FaceExpression.LISTENING,
+                voice_style=VoiceStyle.SOFT,
+                touch_interpretation=touch,
+                actions=[
+                    DeviceAction(type=ActionType.GESTURE, value="nod"),
                 ],
             )
 
@@ -99,4 +94,3 @@ class MockLlmAdapter(LlmPort):
             touch_interpretation=touch,
             actions=[],
         )
-

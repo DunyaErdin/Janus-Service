@@ -58,4 +58,3 @@ def test_response_validator_rejects_low_level_text() -> None:
                 "actions": [],
             }
         )
-

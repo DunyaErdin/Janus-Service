@@ -9,4 +9,6 @@ class Emotion(str, Enum):
     EXCITED = "excited"
     THINKING = "thinking"
     SAD = "sad"
-
+    AFFECTIONATE = "affectionate"
+    PLAYFUL = "playful"
+    LISTENING = "listening"

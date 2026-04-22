@@ -7,4 +7,6 @@ class VoiceStyle(str, Enum):
     SOFT = "soft"
     ENERGETIC = "energetic"
     SERIOUS = "serious"
-
+    PLAYFUL = "playful"
+    SLEEPY = "sleepy"
+    CHEERFUL = "cheerful"

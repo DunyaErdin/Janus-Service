@@ -6,6 +6,3 @@ class ActionType(str, Enum):
     GESTURE = "gesture"
     MOTION = "motion"
     SOUND = "sound"
-    LED = "led"
-    NONE = "none"
-

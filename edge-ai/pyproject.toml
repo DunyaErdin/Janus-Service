@@ -16,6 +16,9 @@ dependencies = [
   "uvicorn>=0.30.0,<1.0.0",
 ]
 
+[project.scripts]
+janus-edge-ai = "app.server:main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.0,<9.0.0",

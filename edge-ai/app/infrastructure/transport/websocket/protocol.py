@@ -43,7 +43,7 @@ def parse_incoming_message(raw_message: str) -> IncomingDeviceMessage:
 
 
 def serialize_outgoing_message(message: OutgoingDeviceMessage) -> str:
-    return message.model_dump_json()
+    return message.model_dump_json(exclude_none=True)
 
 
 def to_domain_event(message: IncomingDeviceMessage) -> DeviceEvent:
@@ -114,12 +114,14 @@ def build_ack_message(
     device_id: str | None,
     session_id: str | None,
     correlation_id: str | None,
+    ack_for: str,
     message: str,
 ) -> AckMessage:
     return AckMessage(
         device_id=device_id,
         session_id=session_id,
         correlation_id=correlation_id,
+        ack_for=ack_for,
         message=message,
     )
 
@@ -154,4 +156,3 @@ def build_error_message(
         message=message,
         retryable=retryable,
     )
-

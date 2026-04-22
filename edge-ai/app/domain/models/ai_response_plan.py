@@ -25,11 +25,9 @@ SpokenText = Annotated[
 
 _ALLOWED_ACTION_VALUES: dict[ActionType, frozenset[str]] = {
     ActionType.FACE: frozenset(item.value for item in FaceExpression),
-    ActionType.GESTURE: frozenset({"nod", "wave", "tilt_head", "lean_in"}),
-    ActionType.MOTION: frozenset({"orient_to_user", "pause_motion", "resume_idle"}),
-    ActionType.SOUND: frozenset({"ack_chime", "listen_chime", "soft_alert"}),
-    ActionType.LED: frozenset({"idle_glow", "listen_glow", "warm_pulse"}),
-    ActionType.NONE: frozenset({"noop"}),
+    ActionType.GESTURE: frozenset({"nod", "wave", "lean_in", "head_tilt"}),
+    ActionType.MOTION: frozenset({"small_forward", "small_back", "orient_user", "settle_idle"}),
+    ActionType.SOUND: frozenset({"chime", "soft_ack", "listen_beep"}),
 }
 
 
@@ -63,12 +61,10 @@ class AIResponsePlan(BaseModel):
     face_expression: FaceExpression
     voice_style: VoiceStyle
     touch_interpretation: TouchInterpretation
-    actions: list[DeviceAction] = Field(default_factory=list, max_length=4)
+    actions: list[DeviceAction] = Field(default_factory=list, max_length=2)
 
     @model_validator(mode="after")
     def validate_action_set(self) -> "AIResponsePlan":
-        none_actions = [action for action in self.actions if action.type == ActionType.NONE]
-        if none_actions and len(self.actions) > 1:
-            raise ValueError("The 'none' action cannot be combined with other actions.")
+        if len({action.type for action in self.actions}) != len(self.actions):
+            raise ValueError("Action types must not repeat within one response plan.")
         return self
-
