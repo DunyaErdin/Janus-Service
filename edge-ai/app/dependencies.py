@@ -18,10 +18,12 @@ from app.infrastructure.adapters.llm.mock_llm_adapter import MockLlmAdapter
 from app.infrastructure.adapters.repositories.in_memory_session_repository import (
     InMemorySessionRepository,
 )
+from app.infrastructure.adapters.stt.gemini_stt_adapter import GeminiSttAdapter
 from app.infrastructure.adapters.stt.placeholder_stt_adapter import PlaceholderSttAdapter
 from app.infrastructure.adapters.telemetry.json_logger_telemetry_adapter import (
     JsonLoggerTelemetryAdapter,
 )
+from app.infrastructure.adapters.tts.gemini_tts_adapter import GeminiTtsAdapter
 from app.infrastructure.adapters.tts.placeholder_tts_adapter import PlaceholderTtsAdapter
 from app.infrastructure.transport.websocket.connection_manager import ConnectionManager
 
@@ -83,11 +85,26 @@ def get_llm_adapter() -> LlmPort:
 
 @lru_cache
 def get_stt_adapter() -> SttPort:
+    settings = get_settings()
+    if settings.stt_provider == "gemini":
+        return GeminiSttAdapter(
+            api_key=settings.gemini_api_key,
+            model_id=settings.gemini_stt_model_id,
+            request_timeout_seconds=settings.request_timeout_seconds,
+        )
     return PlaceholderSttAdapter()
 
 
 @lru_cache
 def get_tts_adapter() -> TtsPort:
+    settings = get_settings()
+    if settings.tts_provider == "gemini":
+        return GeminiTtsAdapter(
+            api_key=settings.gemini_api_key,
+            model_id=settings.gemini_tts_model_id,
+            voice_name=settings.gemini_tts_voice_name,
+            request_timeout_seconds=settings.request_timeout_seconds,
+        )
     return PlaceholderTtsAdapter()
 
 

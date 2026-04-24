@@ -17,8 +17,13 @@ class TtsSynthesisRequest(BaseModel):
 
 class TtsSynthesisPlan(BaseModel):
     provider: str
-    status: Literal["planned", "skipped", "unavailable"]
+    status: Literal["planned", "skipped", "unavailable", "generated"]
     reference: str | None = Field(default=None, max_length=256)
+    encoding: str | None = Field(default=None, max_length=32)
+    sample_rate_hz: int | None = Field(default=None, ge=8000, le=96000)
+    channels: int | None = Field(default=None, ge=1, le=2)
+    data_base64: str | None = None
+    mime_type: str | None = Field(default=None, max_length=64)
 
 
 class TtsPort(ABC):
@@ -27,4 +32,3 @@ class TtsPort(ABC):
     @abstractmethod
     async def plan_synthesis(self, request: TtsSynthesisRequest) -> TtsSynthesisPlan:
         raise NotImplementedError
-

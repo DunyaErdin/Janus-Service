@@ -27,7 +27,7 @@ class MockLlmAdapter(LlmPort):
 
         if transcript:
             return AIResponsePlan(
-                spoken_text="Seni duydum. Yardımcı olayım.",
+                spoken_text="Seni duydum. Yardimci olayim.",
                 emotion=Emotion.CURIOUS,
                 face_expression=FaceExpression.LISTENING,
                 voice_style=VoiceStyle.WARM,
@@ -40,7 +40,7 @@ class MockLlmAdapter(LlmPort):
 
         if touch == TouchInterpretation.EXPLICIT_LISTEN_REQUEST:
             return AIResponsePlan(
-                spoken_text="Hazırım, seni dinliyorum.",
+                spoken_text="Hazirim, seni dinliyorum.",
                 emotion=Emotion.LISTENING,
                 face_expression=FaceExpression.LISTENING,
                 voice_style=VoiceStyle.SOFT,
@@ -52,7 +52,7 @@ class MockLlmAdapter(LlmPort):
 
         if touch == TouchInterpretation.AFFECTION:
             return AIResponsePlan(
-                spoken_text="Canım, buradayım. Seni sevgiyle dinliyorum.",
+                spoken_text="Canim, buradayim. Seni sevgiyle dinliyorum.",
                 emotion=Emotion.AFFECTIONATE,
                 face_expression=FaceExpression.SMILE,
                 voice_style=VoiceStyle.WARM,
@@ -64,7 +64,7 @@ class MockLlmAdapter(LlmPort):
 
         if touch == TouchInterpretation.PETTING:
             return AIResponsePlan(
-                spoken_text="Buradayım. Bu nazik dokunuşunu fark ettim.",
+                spoken_text="Buradayim. Bu nazik dokunusunu fark ettim.",
                 emotion=Emotion.AFFECTIONATE,
                 face_expression=FaceExpression.HAPPY_EYES,
                 voice_style=VoiceStyle.SOFT,
@@ -76,7 +76,7 @@ class MockLlmAdapter(LlmPort):
 
         if touch == TouchInterpretation.ATTENTION_REQUEST:
             return AIResponsePlan(
-                spoken_text="Buradayım, seni dikkatle dinliyorum.",
+                spoken_text="Buradayim, seni dikkatle dinliyorum.",
                 emotion=Emotion.LISTENING,
                 face_expression=FaceExpression.LISTENING,
                 voice_style=VoiceStyle.SOFT,
@@ -87,7 +87,7 @@ class MockLlmAdapter(LlmPort):
             )
 
         return AIResponsePlan(
-            spoken_text="Buradayım.",
+            spoken_text="Buradayim.",
             emotion=Emotion.NEUTRAL,
             face_expression=FaceExpression.IDLE,
             voice_style=VoiceStyle.CALM,

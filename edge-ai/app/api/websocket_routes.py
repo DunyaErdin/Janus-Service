@@ -16,6 +16,7 @@ from app.infrastructure.transport.websocket.connection_manager import (
 from app.infrastructure.transport.websocket.protocol import (
     ProtocolDecodeError,
     build_ack_message,
+    build_audio_output_message,
     build_ai_response_message,
     build_error_message,
     parse_incoming_message,
@@ -162,6 +163,26 @@ async def device_websocket(
                             response_plan=result.response_plan,
                         ),
                     )
+                    if (
+                        result.tts_plan is not None
+                        and result.tts_plan.data_base64 is not None
+                        and result.tts_plan.encoding is not None
+                        and result.tts_plan.sample_rate_hz is not None
+                        and result.tts_plan.channels is not None
+                    ):
+                        await connection_manager.send_to_socket(
+                            websocket,
+                            build_audio_output_message(
+                                device_id=domain_event.device_id,
+                                session_id=result.session_id,
+                                correlation_id=domain_event.correlation_id,
+                                encoding=result.tts_plan.encoding,
+                                sample_rate_hz=result.tts_plan.sample_rate_hz,
+                                channels=result.tts_plan.channels,
+                                data_base64=result.tts_plan.data_base64,
+                                mime_type=result.tts_plan.mime_type,
+                            ),
+                        )
 
                 if incoming_message.message_type == "session_end" and registered_device_id is not None:
                     await connection_manager.bind_session(registered_device_id, None)

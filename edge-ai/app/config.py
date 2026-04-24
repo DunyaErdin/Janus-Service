@@ -27,8 +27,13 @@ class Settings(BaseSettings):
     websocket_path: str = "/ws/device"
     allowed_device_ids: str | None = None
     llm_provider: Literal["mock", "gemini"] = "mock"
+    stt_provider: Literal["placeholder", "gemini"] = "gemini"
+    tts_provider: Literal["placeholder", "gemini"] = "gemini"
     gemini_api_key: str | None = None
     gemini_model_id: str = "configure-me"
+    gemini_stt_model_id: str = "gemini-2.5-flash"
+    gemini_tts_model_id: str = "gemini-3.1-flash-tts-preview"
+    gemini_tts_voice_name: str = "Kore"
     request_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
     max_audio_chunks_per_session: int = Field(default=256, ge=16, le=4096)
     session_history_limit: int = Field(default=20, ge=4, le=100)

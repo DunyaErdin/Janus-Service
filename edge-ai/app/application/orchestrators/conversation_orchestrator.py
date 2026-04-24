@@ -38,7 +38,7 @@ from app.domain.ports.provider_errors import (
 from app.domain.ports.session_repository_port import DeviceSessionRepositoryPort
 from app.domain.ports.stt_port import SttPort, TranscriptionRequest
 from app.domain.ports.telemetry_port import TelemetryEvent, TelemetryPort
-from app.domain.ports.tts_port import TtsPort, TtsSynthesisRequest
+from app.domain.ports.tts_port import TtsPort, TtsSynthesisPlan, TtsSynthesisRequest
 
 
 class OrchestrationResult(BaseModel):
@@ -46,6 +46,7 @@ class OrchestrationResult(BaseModel):
     session_id: str | None
     ack_message: str
     response_plan: AIResponsePlan | None = None
+    tts_plan: TtsSynthesisPlan | None = None
     provider_used: str | None = None
     error_category: str | None = None
 
@@ -115,6 +116,7 @@ class ConversationOrchestrator:
 
         ack_message = f"{event.event_type}_ack"
         response_plan: AIResponsePlan | None = None
+        tts_plan: TtsSynthesisPlan | None = None
         provider_used: str | None = None
         error_category: str | None = None
 
@@ -125,13 +127,33 @@ class ConversationOrchestrator:
             elif isinstance(event, SessionStartEvent):
                 if event.trigger is not None:
                     session.metadata["session_trigger"] = event.trigger
+                if event.encoding is not None:
+                    session.metadata["session_encoding"] = event.encoding
+                if event.sample_rate_hz is not None:
+                    session.metadata["session_sample_rate_hz"] = str(event.sample_rate_hz)
+                if event.channels is not None:
+                    session.metadata["session_channels"] = str(event.channels)
                 ack_message = "session_started"
             elif isinstance(event, SessionEndEvent):
                 session = await self._session_repository.end_session(event.device_id, event.reason) or session
+                if event.trigger is not None:
+                    session.metadata["session_trigger"] = event.trigger
+                if event.elapsed_ms is not None:
+                    session.metadata["session_elapsed_ms"] = str(event.elapsed_ms)
+                if event.chunk_count is not None:
+                    session.metadata["session_chunk_count"] = str(event.chunk_count)
                 ack_message = "session_ended"
             elif isinstance(event, HeartbeatEvent):
                 if event.sequence is not None:
                     session.metadata["last_heartbeat_sequence"] = str(event.sequence)
+                if event.uptime_ms is not None:
+                    session.metadata["uptime_ms"] = str(event.uptime_ms)
+                if event.wifi_connected is not None:
+                    session.metadata["wifi_connected"] = str(event.wifi_connected).lower()
+                if event.transport_connected is not None:
+                    session.metadata["transport_connected"] = str(event.transport_connected).lower()
+                if event.active_session is not None:
+                    session.metadata["device_reports_active_session"] = str(event.active_session).lower()
                 ack_message = "heartbeat_ack"
             elif isinstance(event, StatusEvent):
                 session.latest_status = event.status
@@ -140,6 +162,7 @@ class ConversationOrchestrator:
                 interpreted_touch = self._touch_interpreter.interpret(event.touch)
                 session.last_touch = interpreted_touch
                 session.touch_history = (session.touch_history + [interpreted_touch])[-self._session_history_limit :]
+                provider_used = self._llm.provider_name
                 response_plan, provider_used = await self._generate_response(
                     session=session,
                     latest_touch=interpreted_touch,
@@ -155,11 +178,15 @@ class ConversationOrchestrator:
                 self._buffer_audio(session, event)
                 ack_message = "audio_buffered"
                 if event.is_final:
+                    ack_message = "audio_finalized"
+                    provider_used = self._stt.provider_name
                     transcript = await self._transcribe_audio(session, event)
-                    session.conversation_history = self._append_turn(
-                        session.conversation_history,
-                        ConversationTurn(role="user", text=transcript),
-                    )
+                    if transcript.strip():
+                        session.conversation_history = self._append_turn(
+                            session.conversation_history,
+                            ConversationTurn(role="user", text=transcript),
+                        )
+                    provider_used = self._llm.provider_name
                     response_plan, provider_used = await self._generate_response(
                         session=session,
                         latest_touch=session.last_touch,
@@ -167,7 +194,6 @@ class ConversationOrchestrator:
                         interaction_mode="replying",
                     )
                     session.audio_buffer = AudioBufferState()
-                    ack_message = "audio_finalized"
         except ResponseValidationError:
             error_category = "response_validation"
             provider_used = self._llm.provider_name
@@ -177,7 +203,12 @@ class ConversationOrchestrator:
             )
         except (ProviderUnavailableError, ProviderInvocationError):
             error_category = "provider_failure"
-            provider_used = self._llm.provider_name
+            if provider_used is None:
+                provider_used = (
+                    self._stt.provider_name
+                    if isinstance(event, AudioChunkEvent)
+                    else self._llm.provider_name
+                )
             response_plan = self._fallback_response_service.build(
                 touch_interpretation=self._safe_touch_value(session.last_touch),
                 reason="processing_failure",
@@ -197,6 +228,7 @@ class ConversationOrchestrator:
                 session.conversation_history,
                 response_plan.spoken_text,
             )
+            tts_plan = await self._plan_tts(session=session, response_plan=response_plan)
 
         await self._session_repository.save(session)
         await self._telemetry.publish(
@@ -218,6 +250,7 @@ class ConversationOrchestrator:
             session_id=session.session_id,
             ack_message=ack_message,
             response_plan=response_plan,
+            tts_plan=tts_plan,
             provider_used=provider_used,
             error_category=error_category,
         )
@@ -231,6 +264,16 @@ class ConversationOrchestrator:
 
         if isinstance(event, SessionEndEvent):
             return await self._session_repository.get_active(event.device_id)
+
+        if isinstance(event, AudioChunkEvent):
+            active_session = await self._session_repository.get_active(event.device_id)
+            if active_session is not None:
+                return active_session
+            if event.session_id is not None:
+                return await self._session_repository.start_new_session(
+                    device_id=event.device_id,
+                    requested_session_id=event.session_id,
+                )
 
         return await self._session_repository.get_or_create(event.device_id)
 
@@ -299,14 +342,21 @@ class ConversationOrchestrator:
         )
         candidate_plan = await self._llm.generate_response(prompt)
         validated_plan = self._response_validator.validate(candidate_plan)
+        return validated_plan, self._llm.provider_name
 
+    async def _plan_tts(
+        self,
+        *,
+        session: DeviceSessionContext,
+        response_plan: AIResponsePlan,
+    ) -> TtsSynthesisPlan | None:
         try:
-            await self._tts.plan_synthesis(
+            return await self._tts.plan_synthesis(
                 TtsSynthesisRequest(
                     device_id=session.device_id,
                     session_id=session.session_id,
-                    text=validated_plan.spoken_text,
-                    voice_style=validated_plan.voice_style,
+                    text=response_plan.spoken_text,
+                    voice_style=response_plan.voice_style,
                 )
             )
         except (ProviderUnavailableError, ProviderInvocationError):
@@ -321,8 +371,7 @@ class ConversationOrchestrator:
                     error_category="tts_unavailable",
                 )
             )
-
-        return validated_plan, self._llm.provider_name
+            return None
 
     def _append_turn(
         self,

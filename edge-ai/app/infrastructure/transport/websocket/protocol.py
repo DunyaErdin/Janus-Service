@@ -16,6 +16,7 @@ from app.domain.models.device_event import (
 from app.schemas.websocket_messages import (
     AIResponsePlanMessage,
     AckMessage,
+    AudioOutputMessage,
     AudioChunkMessage,
     ErrorMessage,
     HeartbeatMessage,
@@ -62,6 +63,10 @@ def to_domain_event(message: IncomingDeviceMessage) -> DeviceEvent:
             correlation_id=message.correlation_id,
             sent_at=message.sent_at,
             sequence=message.sequence,
+            uptime_ms=message.uptime_ms,
+            wifi_connected=message.wifi_connected,
+            transport_connected=message.transport_connected,
+            active_session=message.active_session,
         )
 
     if isinstance(message, TouchEventMessage):
@@ -75,6 +80,7 @@ def to_domain_event(message: IncomingDeviceMessage) -> DeviceEvent:
         return AudioChunkEvent(
             device_id=message.device_id,
             correlation_id=message.correlation_id,
+            session_id=message.session_id,
             chunk_id=message.chunk_id,
             encoding=message.encoding,
             sample_rate_hz=message.sample_rate_hz,
@@ -90,13 +96,20 @@ def to_domain_event(message: IncomingDeviceMessage) -> DeviceEvent:
             correlation_id=message.correlation_id,
             requested_session_id=message.requested_session_id,
             trigger=message.trigger,
+            encoding=message.encoding,
+            sample_rate_hz=message.sample_rate_hz,
+            channels=message.channels,
         )
 
     if isinstance(message, SessionEndMessage):
         return SessionEndEvent(
             device_id=message.device_id,
             correlation_id=message.correlation_id,
+            session_id=message.session_id,
             reason=message.reason,
+            elapsed_ms=message.elapsed_ms,
+            chunk_count=message.chunk_count,
+            trigger=message.trigger,
         )
 
     if isinstance(message, StatusMessage):
@@ -121,7 +134,9 @@ def build_ack_message(
         device_id=device_id,
         session_id=session_id,
         correlation_id=correlation_id,
+        acked_message_type=ack_for,
         ack_for=ack_for,
+        detail=message,
         message=message,
     )
 
@@ -138,6 +153,11 @@ def build_ai_response_message(
         session_id=session_id,
         correlation_id=correlation_id,
         response_plan=response_plan,
+        spoken_text=response_plan.spoken_text,
+        emotion=response_plan.emotion,
+        face_expression=response_plan.face_expression,
+        voice_style=response_plan.voice_style,
+        should_speak=True,
     )
 
 
@@ -153,6 +173,30 @@ def build_error_message(
         device_id=device_id,
         correlation_id=correlation_id,
         code=code,
+        detail=message,
         message=message,
         retryable=retryable,
+    )
+
+
+def build_audio_output_message(
+    *,
+    device_id: str,
+    session_id: str,
+    correlation_id: str | None,
+    encoding: str,
+    sample_rate_hz: int,
+    channels: int,
+    data_base64: str,
+    mime_type: str | None,
+) -> AudioOutputMessage:
+    return AudioOutputMessage(
+        device_id=device_id,
+        session_id=session_id,
+        correlation_id=correlation_id,
+        encoding=encoding,
+        sample_rate_hz=sample_rate_hz,
+        channels=channels,
+        data_base64=data_base64,
+        mime_type=mime_type,
     )

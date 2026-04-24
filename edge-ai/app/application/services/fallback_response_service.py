@@ -18,7 +18,7 @@ class FallbackResponseService:
     ) -> AIResponsePlan:
         if reason == "unclear_input":
             return AIResponsePlan(
-                spoken_text="Seni tam anlayamadım. Bir kez daha söyler misin?",
+                spoken_text="Seni tam anlayamadim. Bir kez daha soyler misin?",
                 emotion=Emotion.LISTENING,
                 face_expression=FaceExpression.LISTENING,
                 voice_style=VoiceStyle.SOFT,
@@ -27,7 +27,7 @@ class FallbackResponseService:
             )
 
         return AIResponsePlan(
-            spoken_text="Seni duydum ama şu an küçük bir sorun yaşadım.",
+            spoken_text="Seni duydum ama su an kucuk bir sorun yasadim.",
             emotion=Emotion.THINKING,
             face_expression=FaceExpression.THINKING,
             voice_style=VoiceStyle.CALM,

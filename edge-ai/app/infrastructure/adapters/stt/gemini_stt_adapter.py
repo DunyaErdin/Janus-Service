@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from typing import Any
 
 import httpx
 
-from app.domain.models.ai_response_plan import AIResponsePlan
-from app.domain.ports.llm_port import LlmPort, LlmPromptInput
 from app.domain.ports.provider_errors import (
     ProviderInvocationError,
     ProviderUnavailableError,
 )
-from app.schemas.llm_response_schema import (
-    StructuredResponseSchemaError,
-    parse_llm_structured_response,
+from app.domain.ports.stt_port import SttPort, TranscriptionRequest, TranscriptionResult
+from app.infrastructure.audio.wav_codec import (
+    decode_base64_audio_chunks,
+    pcm16le_to_wav_bytes,
 )
 
 
-class GeminiLlmAdapter(LlmPort):
-    provider_name = "gemini"
+class GeminiSttAdapter(SttPort):
+    provider_name = "gemini_stt"
     _BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
     _MAX_ATTEMPTS = 3
     _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
@@ -34,13 +34,23 @@ class GeminiLlmAdapter(LlmPort):
         self._model_id = model_id
         self._request_timeout_seconds = request_timeout_seconds
 
-    async def generate_response(self, prompt: LlmPromptInput) -> AIResponsePlan:
+    async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResult:
         if not self._api_key:
             raise ProviderUnavailableError(
-                "Gemini API key is not configured. Set EDGE_AI_GEMINI_API_KEY to enable a real adapter."
+                "Gemini API key is not configured. Set EDGE_AI_GEMINI_API_KEY to enable STT."
+            )
+        if request.encoding != "pcm16":
+            raise ProviderUnavailableError(
+                f"Gemini STT adapter only supports pcm16 input right now, got {request.encoding!r}."
             )
 
-        request_payload = self._build_request_payload(prompt)
+        pcm_bytes = decode_base64_audio_chunks(request.audio_chunks)
+        wav_bytes = pcm16le_to_wav_bytes(
+            pcm_bytes,
+            sample_rate_hz=request.sample_rate_hz,
+            channels=request.channels,
+        )
+        request_payload = self._build_request_payload(wav_bytes)
         request_url = f"{self._BASE_URL}/models/{self._model_id}:generateContent"
 
         async with httpx.AsyncClient(timeout=self._request_timeout_seconds) as client:
@@ -58,9 +68,7 @@ class GeminiLlmAdapter(LlmPort):
                     break
                 except httpx.TimeoutException as exc:
                     if attempt >= self._MAX_ATTEMPTS:
-                        raise ProviderInvocationError(
-                            "Gemini request timed out before a valid response was received."
-                        ) from exc
+                        raise ProviderInvocationError("Gemini STT request timed out.") from exc
                 except httpx.HTTPStatusError as exc:
                     if (
                         attempt >= self._MAX_ATTEMPTS
@@ -68,71 +76,61 @@ class GeminiLlmAdapter(LlmPort):
                     ):
                         response_text = exc.response.text[:500]
                         raise ProviderInvocationError(
-                            f"Gemini request failed with status {exc.response.status_code}: {response_text}"
+                            f"Gemini STT request failed with status {exc.response.status_code}: {response_text}"
                         ) from exc
                 except httpx.HTTPError as exc:
                     if attempt >= self._MAX_ATTEMPTS:
                         raise ProviderInvocationError(
-                            "Gemini request failed before a valid response was received."
+                            "Gemini STT request failed before a valid response was received."
                         ) from exc
 
                 await asyncio.sleep(0.4 * attempt)
 
-        return self._parse_generate_content_response(response.json())
+        transcript_text = self._parse_generate_content_response(response.json())
+        return TranscriptionResult(text=transcript_text)
 
-    def _build_request_payload(self, prompt: LlmPromptInput) -> dict[str, Any]:
+    def _build_request_payload(self, wav_bytes: bytes) -> dict[str, Any]:
+        audio_b64 = base64.b64encode(wav_bytes).decode("ascii")
         return {
-            "system_instruction": {
-                "parts": [
-                    {
-                        "text": prompt.render_system_instruction(),
-                    }
-                ]
-            },
             "contents": [
                 {
                     "role": "user",
                     "parts": [
                         {
-                            "text": prompt.render_user_prompt(),
-                        }
+                            "inline_data": {
+                                "mime_type": "audio/wav",
+                                "data": audio_b64,
+                            }
+                        },
+                        {
+                            "text": (
+                                "Transcribe the spoken audio exactly as plain text. "
+                                "Return only the transcript text, without quotes, labels, markdown, or explanations. "
+                                "If the speech is unclear, return an empty string."
+                            )
+                        },
                     ],
                 }
-            ],
-            "generationConfig": {
-                "temperature": 0.2,
-                "topP": 0.8,
-                "candidateCount": 1,
-                "responseMimeType": "application/json",
-                "responseJsonSchema": prompt.response_schema,
-            },
+            ]
         }
 
-    def _parse_generate_content_response(self, payload: dict[str, Any]) -> AIResponsePlan:
+    def _parse_generate_content_response(self, payload: dict[str, Any]) -> str:
         candidates = payload.get("candidates") or []
         if not candidates:
             prompt_feedback = payload.get("promptFeedback")
             raise ProviderInvocationError(
-                f"Gemini returned no candidates. promptFeedback={prompt_feedback!r}"
+                f"Gemini STT returned no candidates. promptFeedback={prompt_feedback!r}"
             )
 
         first_candidate = candidates[0]
         finish_reason = first_candidate.get("finishReason")
         if finish_reason not in {None, "STOP"}:
             raise ProviderInvocationError(
-                f"Gemini did not finish cleanly. finishReason={finish_reason!r}"
+                f"Gemini STT did not finish cleanly. finishReason={finish_reason!r}"
             )
 
         raw_text = self._extract_candidate_text(first_candidate)
-        if not raw_text:
-            raise ProviderInvocationError("Gemini returned an empty candidate body.")
-
-        try:
-            return parse_llm_structured_response(raw_text)
-        except StructuredResponseSchemaError as exc:
-            raise ProviderInvocationError(
-                "Gemini returned text that could not be validated as RobotStructuredResponsePlan JSON."
-            ) from exc
+        return self._normalize_transcript_text(raw_text)
 
     def _extract_candidate_text(self, candidate: dict[str, Any]) -> str:
         content = candidate.get("content") or {}
@@ -144,3 +142,18 @@ class GeminiLlmAdapter(LlmPort):
                 if isinstance(text, str):
                     text_parts.append(text)
         return "".join(text_parts).strip()
+
+    def _normalize_transcript_text(self, raw_text: str) -> str:
+        normalized = raw_text.strip()
+        if normalized.startswith("```") and normalized.endswith("```"):
+            lines = normalized.splitlines()
+            if len(lines) >= 2:
+                normalized = "\n".join(lines[1:-1]).strip()
+
+        if normalized.startswith("Transcript:"):
+            normalized = normalized.partition(":")[2].strip()
+
+        if len(normalized) >= 2 and normalized[0] == normalized[-1] and normalized[0] in {'"', "'"}:
+            normalized = normalized[1:-1].strip()
+
+        return normalized

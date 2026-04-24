@@ -36,6 +36,32 @@ _ALLOWED_VOICES_BY_EMOTION: dict[Emotion, set[VoiceStyle]] = {
     Emotion.LISTENING: {VoiceStyle.SOFT, VoiceStyle.CALM},
 }
 
+_DEFAULT_FACE_BY_EMOTION: dict[Emotion, FaceExpression] = {
+    Emotion.NEUTRAL: FaceExpression.IDLE,
+    Emotion.HAPPY: FaceExpression.SMILE,
+    Emotion.CURIOUS: FaceExpression.LISTENING,
+    Emotion.SLEEPY: FaceExpression.SLEEPY,
+    Emotion.EXCITED: FaceExpression.HAPPY_EYES,
+    Emotion.THINKING: FaceExpression.THINKING,
+    Emotion.SAD: FaceExpression.SAD_EYES,
+    Emotion.AFFECTIONATE: FaceExpression.SMILE,
+    Emotion.PLAYFUL: FaceExpression.WINK,
+    Emotion.LISTENING: FaceExpression.LISTENING,
+}
+
+_DEFAULT_VOICE_BY_EMOTION: dict[Emotion, VoiceStyle] = {
+    Emotion.NEUTRAL: VoiceStyle.CALM,
+    Emotion.HAPPY: VoiceStyle.WARM,
+    Emotion.CURIOUS: VoiceStyle.WARM,
+    Emotion.SLEEPY: VoiceStyle.SLEEPY,
+    Emotion.EXCITED: VoiceStyle.ENERGETIC,
+    Emotion.THINKING: VoiceStyle.CALM,
+    Emotion.SAD: VoiceStyle.SOFT,
+    Emotion.AFFECTIONATE: VoiceStyle.WARM,
+    Emotion.PLAYFUL: VoiceStyle.PLAYFUL,
+    Emotion.LISTENING: VoiceStyle.SOFT,
+}
+
 
 class ResponseValidationError(ValueError):
     pass
@@ -74,19 +100,30 @@ class ResponseValidator:
 
         allowed_faces = _ALLOWED_FACES_BY_EMOTION[plan.emotion]
         if plan.face_expression not in allowed_faces:
-            raise ResponseValidationError("Face expression does not align with the selected emotion.")
+            plan = plan.model_copy(
+                update={"face_expression": _DEFAULT_FACE_BY_EMOTION[plan.emotion]}
+            )
 
         allowed_voices = _ALLOWED_VOICES_BY_EMOTION[plan.emotion]
         if plan.voice_style not in allowed_voices:
-            raise ResponseValidationError("Voice style does not align with the selected emotion.")
-
-        face_actions = [action for action in plan.actions if action.type == ActionType.FACE]
-        if face_actions and all(action.value != plan.face_expression.value for action in face_actions):
-            raise ResponseValidationError(
-                "Face actions must align with the selected face expression."
+            plan = plan.model_copy(
+                update={"voice_style": _DEFAULT_VOICE_BY_EMOTION[plan.emotion]}
             )
 
-        if len({action.type for action in plan.actions}) != len(plan.actions):
-            raise ResponseValidationError("Action types must be unique within one response plan.")
+        normalized_actions = []
+        seen_action_types: set[ActionType] = set()
+        for action in plan.actions:
+            if action.type in seen_action_types:
+                continue
+            seen_action_types.add(action.type)
+            if action.type == ActionType.FACE and action.value != plan.face_expression.value:
+                normalized_actions.append(
+                    action.model_copy(update={"value": plan.face_expression.value})
+                )
+                continue
+            normalized_actions.append(action)
+
+        if normalized_actions != plan.actions:
+            plan = plan.model_copy(update={"actions": normalized_actions})
 
         return plan
