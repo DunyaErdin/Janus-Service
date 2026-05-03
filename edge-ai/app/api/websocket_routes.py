@@ -6,7 +6,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
-from app.application.orchestrators.conversation_orchestrator import ConversationOrchestrator
+from app.application.orchestrators.conversation_orchestrator import (
+    ConversationOrchestrator,
+)
 from app.config import Settings, get_settings
 from app.dependencies import get_connection_manager, get_conversation_orchestrator
 from app.infrastructure.transport.websocket.connection_manager import (
@@ -16,9 +18,12 @@ from app.infrastructure.transport.websocket.connection_manager import (
 from app.infrastructure.transport.websocket.protocol import (
     ProtocolDecodeError,
     build_ack_message,
-    build_audio_output_message,
+    build_audio_output_end_message,
+    build_audio_output_chunk_messages,
     build_ai_response_message,
     build_error_message,
+    build_wake_detected_message,
+    build_wake_rejected_message,
     parse_incoming_message,
     to_domain_event,
 )
@@ -31,11 +36,33 @@ logger = logging.getLogger("edge_ai.websocket.route")
 @router.websocket(WEBSOCKET_PATH)
 async def device_websocket(
     websocket: WebSocket,
-    orchestrator: Annotated[ConversationOrchestrator, Depends(get_conversation_orchestrator)],
+    orchestrator: Annotated[
+        ConversationOrchestrator, Depends(get_conversation_orchestrator)
+    ],
     connection_manager: Annotated[ConnectionManager, Depends(get_connection_manager)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> None:
     await connection_manager.accept(websocket)
+    if settings.device_auth_token:
+        supplied_token = websocket.headers.get(
+            "x-janus-device-token"
+        ) or websocket.query_params.get("token")
+        if supplied_token != settings.device_auth_token:
+            await connection_manager.send_to_socket(
+                websocket,
+                build_error_message(
+                    code="protocol.auth_failed",
+                    message="Device authentication failed.",
+                    retryable=False,
+                ),
+            )
+            await connection_manager.close_socket(
+                websocket,
+                code=4403,
+                reason="auth_failed",
+            )
+            return
+
     registered_device_id: str | None = None
     protocol_error_count = 0
 
@@ -64,7 +91,10 @@ async def device_websocket(
 
             try:
                 incoming_message = parse_incoming_message(raw_message)
-                if registered_device_id is None and incoming_message.message_type != "hello":
+                if (
+                    registered_device_id is None
+                    and incoming_message.message_type != "hello"
+                ):
                     await connection_manager.send_to_socket(
                         websocket,
                         build_error_message(
@@ -153,6 +183,34 @@ async def device_websocket(
                     ),
                 )
 
+                if (
+                    result.wake_detected is True
+                    and result.wake_interaction_id is not None
+                ):
+                    await connection_manager.send_to_socket(
+                        websocket,
+                        build_wake_detected_message(
+                            device_id=domain_event.device_id,
+                            interaction_id=result.wake_interaction_id,
+                            correlation_id=domain_event.correlation_id,
+                            transcript=result.wake_transcript,
+                            confidence=result.wake_confidence,
+                        ),
+                    )
+                elif (
+                    result.wake_detected is False
+                    and result.wake_interaction_id is not None
+                ):
+                    await connection_manager.send_to_socket(
+                        websocket,
+                        build_wake_rejected_message(
+                            device_id=domain_event.device_id,
+                            interaction_id=result.wake_interaction_id,
+                            correlation_id=domain_event.correlation_id,
+                            reason=result.wake_reject_reason or "not_wake_word",
+                        ),
+                    )
+
                 if result.response_plan is not None and result.session_id is not None:
                     await connection_manager.send_to_socket(
                         websocket,
@@ -163,28 +221,44 @@ async def device_websocket(
                             response_plan=result.response_plan,
                         ),
                     )
-                    if (
-                        result.tts_plan is not None
-                        and result.tts_plan.data_base64 is not None
-                        and result.tts_plan.encoding is not None
-                        and result.tts_plan.sample_rate_hz is not None
-                        and result.tts_plan.channels is not None
+
+                audio_session_id = result.wake_interaction_id or result.session_id
+                if (
+                    audio_session_id is not None
+                    and result.tts_plan is not None
+                    and result.tts_plan.data_base64 is not None
+                    and result.tts_plan.encoding is not None
+                    and result.tts_plan.sample_rate_hz is not None
+                    and result.tts_plan.channels is not None
+                ):
+                    for audio_message in build_audio_output_chunk_messages(
+                        device_id=domain_event.device_id,
+                        session_id=audio_session_id,
+                        correlation_id=domain_event.correlation_id,
+                        encoding=result.tts_plan.encoding,
+                        sample_rate_hz=result.tts_plan.sample_rate_hz,
+                        channels=result.tts_plan.channels,
+                        data_base64=result.tts_plan.data_base64,
+                        mime_type=result.tts_plan.mime_type,
                     ):
                         await connection_manager.send_to_socket(
+                            websocket, audio_message
+                        )
+                    if result.audio_output_end:
+                        await connection_manager.send_to_socket(
                             websocket,
-                            build_audio_output_message(
+                            build_audio_output_end_message(
                                 device_id=domain_event.device_id,
-                                session_id=result.session_id,
+                                session_id=audio_session_id,
+                                interaction_id=result.wake_interaction_id,
                                 correlation_id=domain_event.correlation_id,
-                                encoding=result.tts_plan.encoding,
-                                sample_rate_hz=result.tts_plan.sample_rate_hz,
-                                channels=result.tts_plan.channels,
-                                data_base64=result.tts_plan.data_base64,
-                                mime_type=result.tts_plan.mime_type,
                             ),
                         )
 
-                if incoming_message.message_type == "session_end" and registered_device_id is not None:
+                if (
+                    incoming_message.message_type == "session_end"
+                    and registered_device_id is not None
+                ):
                     await connection_manager.bind_session(registered_device_id, None)
             except ProtocolDecodeError as exc:
                 protocol_error_count += 1

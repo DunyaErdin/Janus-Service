@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from app.application.services.fallback_response_service import FallbackResponseService
+from app.application.services.greeting_service import GreetingService
 from app.application.services.prompt_builder import PromptBuilder
 from app.application.services.response_validator import (
     ResponseValidationError,
@@ -17,17 +18,21 @@ from app.domain.models.ai_response_plan import AIResponsePlan
 from app.domain.models.device_event import (
     AudioChunkEvent,
     DeviceEvent,
+    GreetingRequestEvent,
     HeartbeatEvent,
     HelloEvent,
     SessionEndEvent,
     SessionStartEvent,
     StatusEvent,
     TouchEvent,
+    WakeAudioChunkEvent,
+    WakeListeningStartedEvent,
 )
 from app.domain.models.session_context import (
     AudioBufferState,
     ConversationTurn,
     DeviceSessionContext,
+    WakeBufferState,
 )
 from app.domain.models.touch_context import TouchContext, TouchInterpretation
 from app.domain.ports.llm_port import LlmPort
@@ -39,6 +44,10 @@ from app.domain.ports.session_repository_port import DeviceSessionRepositoryPort
 from app.domain.ports.stt_port import SttPort, TranscriptionRequest
 from app.domain.ports.telemetry_port import TelemetryEvent, TelemetryPort
 from app.domain.ports.tts_port import TtsPort, TtsSynthesisPlan, TtsSynthesisRequest
+from app.domain.ports.wake_detection_port import (
+    WakeDetectionRequest,
+    WakeDetectionService,
+)
 
 
 class OrchestrationResult(BaseModel):
@@ -49,6 +58,12 @@ class OrchestrationResult(BaseModel):
     tts_plan: TtsSynthesisPlan | None = None
     provider_used: str | None = None
     error_category: str | None = None
+    wake_detected: bool | None = None
+    wake_interaction_id: str | None = None
+    wake_transcript: str | None = None
+    wake_confidence: float | None = None
+    wake_reject_reason: str | None = None
+    audio_output_end: bool = False
 
 
 class ConversationOrchestrator:
@@ -58,6 +73,8 @@ class ConversationOrchestrator:
         llm: LlmPort,
         stt: SttPort,
         tts: TtsPort,
+        wake_detection: WakeDetectionService,
+        greeting_service: GreetingService,
         session_repository: DeviceSessionRepositoryPort,
         telemetry: TelemetryPort,
         prompt_builder: PromptBuilder,
@@ -65,11 +82,15 @@ class ConversationOrchestrator:
         response_validator: ResponseValidator,
         fallback_response_service: FallbackResponseService,
         max_audio_chunks_per_session: int,
+        max_wake_chunks_per_interaction: int,
+        max_wake_base64_chars_per_interaction: int,
         session_history_limit: int,
     ) -> None:
         self._llm = llm
         self._stt = stt
         self._tts = tts
+        self._wake_detection = wake_detection
+        self._greeting_service = greeting_service
         self._session_repository = session_repository
         self._telemetry = telemetry
         self._prompt_builder = prompt_builder
@@ -77,6 +98,10 @@ class ConversationOrchestrator:
         self._response_validator = response_validator
         self._fallback_response_service = fallback_response_service
         self._max_audio_chunks_per_session = max_audio_chunks_per_session
+        self._max_wake_chunks_per_interaction = max_wake_chunks_per_interaction
+        self._max_wake_base64_chars_per_interaction = (
+            max_wake_base64_chars_per_interaction
+        )
         self._session_history_limit = session_history_limit
 
     async def handle_event(self, event: DeviceEvent) -> OrchestrationResult:
@@ -119,23 +144,81 @@ class ConversationOrchestrator:
         tts_plan: TtsSynthesisPlan | None = None
         provider_used: str | None = None
         error_category: str | None = None
+        wake_detected: bool | None = None
+        wake_interaction_id: str | None = None
+        wake_transcript: str | None = None
+        wake_confidence: float | None = None
+        wake_reject_reason: str | None = None
+        audio_output_end = False
 
         try:
             if isinstance(event, HelloEvent):
                 self._handle_hello(session, event)
                 ack_message = "hello_ack"
+            elif isinstance(event, WakeListeningStartedEvent):
+                session.metadata["wake_interaction_id"] = event.interaction_id
+                session.metadata["wake_prefilter"] = event.prefilter or "unknown"
+                session.metadata["wake_sample_rate_hz"] = str(event.sample_rate_hz)
+                session.metadata["wake_window_ms"] = str(event.window_ms)
+                session.wake_buffer = WakeBufferState(
+                    interaction_id=event.interaction_id
+                )
+                ack_message = "wake_listening_started_ack"
+            elif isinstance(event, WakeAudioChunkEvent):
+                self._buffer_wake_audio(session, event)
+                ack_message = "wake_audio_buffered"
+                if event.is_final:
+                    provider_used = self._wake_detection.provider_name
+                    result = await self._wake_detection.detect(
+                        WakeDetectionRequest(
+                            device_id=session.device_id,
+                            interaction_id=event.interaction_id,
+                            audio_chunks=session.wake_buffer.buffered_chunks,
+                            encoding=event.encoding.value,
+                            sample_rate_hz=event.sample_rate_hz,
+                            channels=event.channels,
+                        )
+                    )
+                    wake_detected = result.detected
+                    wake_interaction_id = event.interaction_id
+                    wake_transcript = result.transcript
+                    wake_confidence = result.confidence
+                    wake_reject_reason = result.reason
+                    ack_message = (
+                        "wake_detected" if result.detected else "wake_rejected"
+                    )
+                    session.wake_buffer = WakeBufferState()
+            elif isinstance(event, GreetingRequestEvent):
+                provider_used = self._tts.provider_name
+                tts_plan = await self._greeting_service.build_greeting(
+                    device_id=event.device_id,
+                    interaction_id=event.interaction_id,
+                    requested_text=event.text,
+                    sample_rate_hz=event.sample_rate_hz,
+                    channels=event.channels,
+                )
+                wake_interaction_id = event.interaction_id
+                audio_output_end = True
+                ack_message = "greeting_audio_ready"
             elif isinstance(event, SessionStartEvent):
                 if event.trigger is not None:
                     session.metadata["session_trigger"] = event.trigger
                 if event.encoding is not None:
                     session.metadata["session_encoding"] = event.encoding
                 if event.sample_rate_hz is not None:
-                    session.metadata["session_sample_rate_hz"] = str(event.sample_rate_hz)
+                    session.metadata["session_sample_rate_hz"] = str(
+                        event.sample_rate_hz
+                    )
                 if event.channels is not None:
                     session.metadata["session_channels"] = str(event.channels)
                 ack_message = "session_started"
             elif isinstance(event, SessionEndEvent):
-                session = await self._session_repository.end_session(event.device_id, event.reason) or session
+                session = (
+                    await self._session_repository.end_session(
+                        event.device_id, event.reason
+                    )
+                    or session
+                )
                 if event.trigger is not None:
                     session.metadata["session_trigger"] = event.trigger
                 if event.elapsed_ms is not None:
@@ -149,11 +232,17 @@ class ConversationOrchestrator:
                 if event.uptime_ms is not None:
                     session.metadata["uptime_ms"] = str(event.uptime_ms)
                 if event.wifi_connected is not None:
-                    session.metadata["wifi_connected"] = str(event.wifi_connected).lower()
+                    session.metadata["wifi_connected"] = str(
+                        event.wifi_connected
+                    ).lower()
                 if event.transport_connected is not None:
-                    session.metadata["transport_connected"] = str(event.transport_connected).lower()
+                    session.metadata["transport_connected"] = str(
+                        event.transport_connected
+                    ).lower()
                 if event.active_session is not None:
-                    session.metadata["device_reports_active_session"] = str(event.active_session).lower()
+                    session.metadata["device_reports_active_session"] = str(
+                        event.active_session
+                    ).lower()
                 ack_message = "heartbeat_ack"
             elif isinstance(event, StatusEvent):
                 session.latest_status = event.status
@@ -161,7 +250,9 @@ class ConversationOrchestrator:
             elif isinstance(event, TouchEvent):
                 interpreted_touch = self._touch_interpreter.interpret(event.touch)
                 session.last_touch = interpreted_touch
-                session.touch_history = (session.touch_history + [interpreted_touch])[-self._session_history_limit :]
+                session.touch_history = (session.touch_history + [interpreted_touch])[
+                    -self._session_history_limit :
+                ]
                 provider_used = self._llm.provider_name
                 response_plan, provider_used = await self._generate_response(
                     session=session,
@@ -169,7 +260,8 @@ class ConversationOrchestrator:
                     transcript_text=None,
                     interaction_mode=(
                         "listening"
-                        if interpreted_touch.interpreted_as == TouchInterpretation.EXPLICIT_LISTEN_REQUEST
+                        if interpreted_touch.interpreted_as
+                        == TouchInterpretation.EXPLICIT_LISTEN_REQUEST
                         else "replying"
                     ),
                 )
@@ -205,20 +297,34 @@ class ConversationOrchestrator:
             error_category = "provider_failure"
             if provider_used is None:
                 provider_used = (
-                    self._stt.provider_name
+                    self._wake_detection.provider_name
+                    if isinstance(event, WakeAudioChunkEvent)
+                    else self._stt.provider_name
                     if isinstance(event, AudioChunkEvent)
                     else self._llm.provider_name
                 )
-            response_plan = self._fallback_response_service.build(
-                touch_interpretation=self._safe_touch_value(session.last_touch),
-                reason="processing_failure",
-            )
+            if isinstance(event, WakeAudioChunkEvent):
+                wake_detected = False
+                wake_interaction_id = event.interaction_id
+                wake_reject_reason = "wake_provider_unavailable"
+                session.wake_buffer = WakeBufferState()
+            else:
+                response_plan = self._fallback_response_service.build(
+                    touch_interpretation=self._safe_touch_value(session.last_touch),
+                    reason="processing_failure",
+                )
         except Exception:
             error_category = "orchestrator_unhandled_error"
-            response_plan = self._fallback_response_service.build(
-                touch_interpretation=self._safe_touch_value(session.last_touch),
-                reason="processing_failure",
-            )
+            if isinstance(event, WakeAudioChunkEvent):
+                wake_detected = False
+                wake_interaction_id = event.interaction_id
+                wake_reject_reason = "wake_processing_error"
+                session.wake_buffer = WakeBufferState()
+            else:
+                response_plan = self._fallback_response_service.build(
+                    touch_interpretation=self._safe_touch_value(session.last_touch),
+                    reason="processing_failure",
+                )
 
         if isinstance(event, AudioChunkEvent) and event.is_final:
             session.audio_buffer = AudioBufferState()
@@ -228,7 +334,9 @@ class ConversationOrchestrator:
                 session.conversation_history,
                 response_plan.spoken_text,
             )
-            tts_plan = await self._plan_tts(session=session, response_plan=response_plan)
+            tts_plan = await self._plan_tts(
+                session=session, response_plan=response_plan
+            )
 
         await self._session_repository.save(session)
         await self._telemetry.publish(
@@ -237,7 +345,9 @@ class ConversationOrchestrator:
                 device_id=session.device_id,
                 session_id=session.session_id,
                 event_type=event.event_type,
-                orchestrator_phase="completed" if error_category is None else "fallback",
+                orchestrator_phase="completed"
+                if error_category is None
+                else "fallback",
                 latency_ms=(time.perf_counter() - started) * 1000,
                 provider=provider_used,
                 error_category=error_category,
@@ -253,6 +363,12 @@ class ConversationOrchestrator:
             tts_plan=tts_plan,
             provider_used=provider_used,
             error_category=error_category,
+            wake_detected=wake_detected,
+            wake_interaction_id=wake_interaction_id,
+            wake_transcript=wake_transcript,
+            wake_confidence=wake_confidence,
+            wake_reject_reason=wake_reject_reason,
+            audio_output_end=audio_output_end,
         )
 
     async def _resolve_session(self, event: DeviceEvent) -> DeviceSessionContext | None:
@@ -283,8 +399,12 @@ class ConversationOrchestrator:
         if event.firmware_version is not None:
             session.metadata["firmware_version"] = event.firmware_version
 
-    def _buffer_audio(self, session: DeviceSessionContext, event: AudioChunkEvent) -> None:
-        buffered_chunks = session.audio_buffer.buffered_chunks + [event.data_base64]
+    def _buffer_audio(
+        self, session: DeviceSessionContext, event: AudioChunkEvent
+    ) -> None:
+        buffered_chunks = session.audio_buffer.buffered_chunks
+        if event.data_base64:
+            buffered_chunks = buffered_chunks + [event.data_base64]
         if len(buffered_chunks) > self._max_audio_chunks_per_session:
             buffered_chunks = buffered_chunks[-self._max_audio_chunks_per_session :]
 
@@ -295,6 +415,39 @@ class ConversationOrchestrator:
         session.audio_buffer.sample_rate_hz = event.sample_rate_hz
         session.audio_buffer.channels = event.channels
         session.audio_buffer.final_chunk_received = event.is_final
+
+    def _buffer_wake_audio(
+        self, session: DeviceSessionContext, event: WakeAudioChunkEvent
+    ) -> None:
+        wake_buffer = session.wake_buffer
+        if wake_buffer.interaction_id != event.interaction_id:
+            wake_buffer = WakeBufferState(interaction_id=event.interaction_id)
+
+        if event.chunk_id != wake_buffer.next_chunk_id:
+            raise ValueError(
+                f"wake_audio_chunk out of order: got {event.chunk_id}, expected {wake_buffer.next_chunk_id}"
+            )
+
+        total_base64_chars = sum(len(chunk) for chunk in wake_buffer.buffered_chunks)
+        if event.data_base64:
+            total_base64_chars += len(event.data_base64)
+            if total_base64_chars > self._max_wake_base64_chars_per_interaction:
+                raise ValueError("wake_audio_chunk base64 budget exceeded")
+            wake_buffer.buffered_chunks = wake_buffer.buffered_chunks + [
+                event.data_base64
+            ]
+
+        if len(wake_buffer.buffered_chunks) > self._max_wake_chunks_per_interaction:
+            raise ValueError("wake_audio_chunk count budget exceeded")
+
+        wake_buffer.chunk_count = len(wake_buffer.buffered_chunks)
+        wake_buffer.next_chunk_id = event.chunk_id + 1
+        wake_buffer.last_chunk_at = event.sent_at
+        wake_buffer.encoding = event.encoding.value
+        wake_buffer.sample_rate_hz = event.sample_rate_hz
+        wake_buffer.channels = event.channels
+        wake_buffer.final_chunk_received = event.is_final
+        session.wake_buffer = wake_buffer
 
     async def _transcribe_audio(
         self,
@@ -337,7 +490,9 @@ class ConversationOrchestrator:
             interaction_mode=interaction_mode,
             device_state=session.latest_status,
             touch_context=latest_touch,
-            conversation_summary=self._summarize_conversation(session.conversation_history),
+            conversation_summary=self._summarize_conversation(
+                session.conversation_history
+            ),
             latest_user_utterance=transcript_text,
         )
         candidate_plan = await self._llm.generate_response(prompt)
@@ -397,10 +552,7 @@ class ConversationOrchestrator:
             return ""
 
         recent_turns = turns[-4:]
-        return " | ".join(
-            f"{turn.role}: {turn.text}"
-            for turn in recent_turns
-        )
+        return " | ".join(f"{turn.role}: {turn.text}" for turn in recent_turns)
 
     def _is_response_event(self, event: DeviceEvent) -> bool:
         return isinstance(event, TouchEvent) or (

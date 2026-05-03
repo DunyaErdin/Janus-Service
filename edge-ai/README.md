@@ -39,6 +39,7 @@ Production-oriented Python edge orchestration service for a home assistant robot
 - Structured JSON schema parsing for LLM output
 - Semantic validation and safe fallback services
 - Provider boundary through `LlmPort`, `SttPort`, `TtsPort`, `TelemetryPort`, and `DeviceSessionRepositoryPort`
+- Wake boundary through `WakeDetectionService`, with STT-based production detection and an explicit dev fake only for tests.
 
 ## ESP Connectivity Contract
 
@@ -128,11 +129,18 @@ These are the currently used runtime settings:
 - `EDGE_AI_DEFAULT_LANGUAGE`
 - `EDGE_AI_WEBSOCKET_PATH`
 - `EDGE_AI_ALLOWED_DEVICE_IDS`
+- `EDGE_AI_DEVICE_AUTH_TOKEN`
 - `EDGE_AI_LLM_PROVIDER`
+- `EDGE_AI_STT_PROVIDER`
+- `EDGE_AI_TTS_PROVIDER`
+- `EDGE_AI_WAKE_DETECTOR_PROVIDER`
 - `EDGE_AI_GEMINI_API_KEY`
 - `EDGE_AI_GEMINI_MODEL_ID`
 - `EDGE_AI_REQUEST_TIMEOUT_SECONDS`
 - `EDGE_AI_MAX_AUDIO_CHUNKS_PER_SESSION`
+- `EDGE_AI_MAX_WAKE_CHUNKS_PER_INTERACTION`
+- `EDGE_AI_MAX_WAKE_BASE64_CHARS_PER_INTERACTION`
+- `EDGE_AI_DEBUG_STORE_RAW_WAKE_AUDIO`
 - `EDGE_AI_SESSION_HISTORY_LIMIT`
 - `EDGE_AI_WEBSOCKET_HELLO_TIMEOUT_SECONDS`
 - `EDGE_AI_WEBSOCKET_RECEIVE_TIMEOUT_SECONDS`
@@ -174,7 +182,23 @@ Health endpoint:
 
 ```text
 GET /health
+GET /ready
+GET /version
 ```
+
+## Hey Janus Wake Flow
+
+Firmware sends bounded `wake_audio_chunk` windows while idle. The local firmware
+prefilter only reduces traffic; it does not confirm wake. This service confirms
+the wake phrase with `WakeDetectionService` and sends `wake_detected` or
+`wake_rejected`.
+
+After `wake_detected`, firmware sends `greeting_request`. The service synthesizes
+`Size nasıl yardımcı olabilirim?` through `TtsPort` and returns bounded
+`audio_output_chunk` messages followed by `audio_output_end`.
+
+Use `EDGE_AI_WAKE_DETECTOR_PROVIDER=stt` for production. The `dev_fake` provider
+is deterministic test tooling and is not production wake-word recognition.
 
 ## Docker Deployment
 

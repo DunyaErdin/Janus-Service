@@ -26,9 +26,11 @@ class Settings(BaseSettings):
     default_language: str = "tr-TR"
     websocket_path: str = "/ws/device"
     allowed_device_ids: str | None = None
+    device_auth_token: str | None = None
     llm_provider: Literal["mock", "gemini"] = "mock"
     stt_provider: Literal["placeholder", "gemini"] = "gemini"
     tts_provider: Literal["placeholder", "gemini"] = "gemini"
+    wake_detector_provider: Literal["stt", "dev_fake", "disabled"] = "stt"
     gemini_api_key: str | None = None
     gemini_model_id: str = "configure-me"
     gemini_stt_model_id: str = "gemini-2.5-flash"
@@ -36,6 +38,11 @@ class Settings(BaseSettings):
     gemini_tts_voice_name: str = "Kore"
     request_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
     max_audio_chunks_per_session: int = Field(default=256, ge=16, le=4096)
+    max_wake_chunks_per_interaction: int = Field(default=24, ge=1, le=128)
+    max_wake_base64_chars_per_interaction: int = Field(
+        default=65_536, ge=1024, le=262_144
+    )
+    debug_store_raw_wake_audio: bool = False
     session_history_limit: int = Field(default=20, ge=4, le=100)
     websocket_hello_timeout_seconds: float = Field(default=10.0, gt=1.0, le=120.0)
     websocket_receive_timeout_seconds: float = Field(default=90.0, gt=5.0, le=3600.0)
@@ -50,9 +57,7 @@ class Settings(BaseSettings):
         if not self.allowed_device_ids:
             return set()
         return {
-            item.strip()
-            for item in self.allowed_device_ids.split(",")
-            if item.strip()
+            item.strip() for item in self.allowed_device_ids.split(",") if item.strip()
         }
 
     def is_device_allowed(self, device_id: str) -> bool:

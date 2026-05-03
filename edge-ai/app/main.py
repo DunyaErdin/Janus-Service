@@ -24,6 +24,9 @@ def create_app() -> FastAPI:
                 "structured": {
                     "environment": settings.environment,
                     "llm_provider": settings.llm_provider,
+                    "stt_provider": settings.stt_provider,
+                    "tts_provider": settings.tts_provider,
+                    "wake_detector_provider": settings.wake_detector_provider,
                     "websocket_path": settings.websocket_path,
                     "docs_enabled": settings.docs_enabled,
                 }
@@ -60,6 +63,28 @@ def create_app() -> FastAPI:
             "status": "ok",
             "service": settings.app_name,
             "environment": settings.environment,
+        }
+
+    @app.get("/ready", tags=["system"])
+    async def readycheck() -> dict[str, str | bool]:
+        providers_configured = (
+            settings.wake_detector_provider == "dev_fake"
+            or settings.wake_detector_provider == "disabled"
+            or bool(settings.gemini_api_key)
+        )
+        return {
+            "status": "ready" if providers_configured else "degraded",
+            "service": settings.app_name,
+            "wake_detector_provider": settings.wake_detector_provider,
+            "provider_credentials_present": providers_configured,
+        }
+
+    @app.get("/version", tags=["system"])
+    async def version() -> dict[str, str]:
+        return {
+            "service": settings.app_name,
+            "version": "0.1.0",
+            "device_protocol_version": "1.1",
         }
 
     return app

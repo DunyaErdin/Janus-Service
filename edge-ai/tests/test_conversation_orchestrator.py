@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import asyncio
 
-from app.application.orchestrators.conversation_orchestrator import ConversationOrchestrator
+from app.application.orchestrators.conversation_orchestrator import (
+    ConversationOrchestrator,
+)
 from app.application.services.fallback_response_service import FallbackResponseService
+from app.application.services.greeting_service import GreetingService
 from app.application.services.prompt_builder import PromptBuilder
 from app.application.services.response_validator import ResponseValidator
 from app.application.services.touch_interpreter import TouchInterpreter
+from app.application.services.wake_detection_service import (
+    DevFakeWakeDetectionService,
+    SttWakeDetectionService,
+)
 from app.domain.enums.voice_style import VoiceStyle
-from app.domain.models.device_event import AudioChunkEvent, AudioEncoding, SessionStartEvent
+from app.domain.models.device_event import (
+    AudioChunkEvent,
+    AudioEncoding,
+    GreetingRequestEvent,
+    SessionStartEvent,
+    WakeAudioChunkEvent,
+)
 from app.domain.ports.llm_port import LlmPort, LlmPromptInput
 from app.domain.ports.provider_errors import ProviderUnavailableError
 from app.domain.ports.stt_port import SttPort, TranscriptionRequest, TranscriptionResult
@@ -30,6 +43,17 @@ class UnavailableSttAdapter(SttPort):
     provider_name = "unavailable_stt"
 
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResult:
+        raise ProviderUnavailableError("stt unavailable")
+
+
+class CapturingUnavailableSttAdapter(SttPort):
+    provider_name = "capturing_unavailable_stt"
+
+    def __init__(self) -> None:
+        self.requests: list[TranscriptionRequest] = []
+
+    async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResult:
+        self.requests.append(request)
         raise ProviderUnavailableError("stt unavailable")
 
 
@@ -64,6 +88,8 @@ def test_audio_final_with_unavailable_stt_returns_fallback_plan_and_tts() -> Non
             llm=DummyLlmAdapter(),
             stt=UnavailableSttAdapter(),
             tts=tts,
+            wake_detection=SttWakeDetectionService(UnavailableSttAdapter()),
+            greeting_service=GreetingService(tts),
             session_repository=InMemorySessionRepository(),
             telemetry=NoopTelemetry(),
             prompt_builder=PromptBuilder(robot_name="Janus", default_language="tr-TR"),
@@ -71,6 +97,8 @@ def test_audio_final_with_unavailable_stt_returns_fallback_plan_and_tts() -> Non
             response_validator=ResponseValidator(),
             fallback_response_service=FallbackResponseService(),
             max_audio_chunks_per_session=64,
+            max_wake_chunks_per_interaction=24,
+            max_wake_base64_chars_per_interaction=65536,
             session_history_limit=20,
         )
 
@@ -95,10 +123,126 @@ def test_audio_final_with_unavailable_stt_returns_fallback_plan_and_tts() -> Non
         )
 
         assert result.response_plan is not None
-        assert result.response_plan.spoken_text == "Seni duydum ama su an kucuk bir sorun yasadim."
+        assert (
+            result.response_plan.spoken_text
+            == "Seni duydum ama su an kucuk bir sorun yasadim."
+        )
         assert result.tts_plan is not None
         assert result.tts_plan.data_base64 == "AQID"
         assert tts.requests
         assert tts.requests[0].voice_style == VoiceStyle.CALM
+
+    asyncio.run(scenario())
+
+
+def test_dev_fake_wake_detection_and_greeting_request() -> None:
+    async def scenario() -> None:
+        tts = CapturingTtsAdapter()
+        orchestrator = ConversationOrchestrator(
+            llm=DummyLlmAdapter(),
+            stt=UnavailableSttAdapter(),
+            tts=tts,
+            wake_detection=DevFakeWakeDetectionService(),
+            greeting_service=GreetingService(tts),
+            session_repository=InMemorySessionRepository(),
+            telemetry=NoopTelemetry(),
+            prompt_builder=PromptBuilder(robot_name="Janus", default_language="tr-TR"),
+            touch_interpreter=TouchInterpreter(),
+            response_validator=ResponseValidator(),
+            fallback_response_service=FallbackResponseService(),
+            max_audio_chunks_per_session=64,
+            max_wake_chunks_per_interaction=24,
+            max_wake_base64_chars_per_interaction=65536,
+            session_history_limit=20,
+        )
+
+        wake = await orchestrator.handle_event(
+            WakeAudioChunkEvent(
+                device_id="janus-esp-01",
+                interaction_id="wake-1",
+                chunk_id=0,
+                encoding=AudioEncoding.PCM16,
+                sample_rate_hz=16000,
+                channels=1,
+                data_base64="aGV5IGphbnVz",
+                is_final=True,
+            )
+        )
+        assert wake.wake_detected is True
+        assert wake.wake_interaction_id == "wake-1"
+
+        greeting = await orchestrator.handle_event(
+            GreetingRequestEvent(
+                device_id="janus-esp-01",
+                interaction_id="wake-1",
+                text="Size nasıl yardımcı olabilirim?",
+                sample_rate_hz=24000,
+                channels=1,
+            )
+        )
+        assert greeting.tts_plan is not None
+        assert greeting.audio_output_end is True
+        assert tts.requests[0].text == "Size nasıl yardımcı olabilirim?"
+
+    asyncio.run(scenario())
+
+
+def test_empty_final_audio_chunk_uses_previously_buffered_audio() -> None:
+    async def scenario() -> None:
+        stt = CapturingUnavailableSttAdapter()
+        orchestrator = ConversationOrchestrator(
+            llm=DummyLlmAdapter(),
+            stt=stt,
+            tts=CapturingTtsAdapter(),
+            wake_detection=SttWakeDetectionService(stt),
+            greeting_service=GreetingService(CapturingTtsAdapter()),
+            session_repository=InMemorySessionRepository(),
+            telemetry=NoopTelemetry(),
+            prompt_builder=PromptBuilder(robot_name="Janus", default_language="tr-TR"),
+            touch_interpreter=TouchInterpreter(),
+            response_validator=ResponseValidator(),
+            fallback_response_service=FallbackResponseService(),
+            max_audio_chunks_per_session=64,
+            max_wake_chunks_per_interaction=24,
+            max_wake_base64_chars_per_interaction=65536,
+            session_history_limit=20,
+        )
+
+        await orchestrator.handle_event(
+            SessionStartEvent(
+                device_id="janus-esp-01",
+                requested_session_id="session-1",
+                trigger="record_touch",
+            )
+        )
+        await orchestrator.handle_event(
+            AudioChunkEvent(
+                device_id="janus-esp-01",
+                session_id="session-1",
+                chunk_id=0,
+                encoding=AudioEncoding.PCM16,
+                sample_rate_hz=16000,
+                channels=1,
+                data_base64="AAAA",
+                is_final=False,
+            )
+        )
+
+        result = await orchestrator.handle_event(
+            AudioChunkEvent(
+                device_id="janus-esp-01",
+                session_id="session-1",
+                chunk_id=1,
+                encoding=AudioEncoding.PCM16,
+                sample_rate_hz=16000,
+                channels=1,
+                data_base64="",
+                is_final=True,
+            )
+        )
+
+        assert result.response_plan is not None
+        assert stt.requests
+        assert stt.requests[0].audio_chunks == ["AAAA"]
 
     asyncio.run(scenario())
