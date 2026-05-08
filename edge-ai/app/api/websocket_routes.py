@@ -255,6 +255,18 @@ async def device_websocket(
                             ),
                         )
 
+                if result.tts_error is not None:
+                    await connection_manager.send_to_socket(
+                        websocket,
+                        build_error_message(
+                            code="tts.unavailable",
+                            message=_short_error_message(result.tts_error),
+                            retryable=True,
+                            device_id=domain_event.device_id,
+                            correlation_id=domain_event.correlation_id,
+                        ),
+                    )
+
                 if (
                     incoming_message.message_type == "session_end"
                     and registered_device_id is not None
@@ -320,3 +332,8 @@ async def device_websocket(
             websocket=websocket,
             reason="route_closed",
         )
+
+
+def _short_error_message(message: str) -> str:
+    normalized = " ".join(message.split()) or "TTS audio generation failed."
+    return normalized[:240]

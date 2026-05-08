@@ -64,6 +64,7 @@ class OrchestrationResult(BaseModel):
     wake_confidence: float | None = None
     wake_reject_reason: str | None = None
     audio_output_end: bool = False
+    tts_error: str | None = None
 
 
 class ConversationOrchestrator:
@@ -150,6 +151,7 @@ class ConversationOrchestrator:
         wake_confidence: float | None = None
         wake_reject_reason: str | None = None
         audio_output_end = False
+        tts_error: str | None = None
 
         try:
             if isinstance(event, HelloEvent):
@@ -293,7 +295,7 @@ class ConversationOrchestrator:
                 touch_interpretation=self._safe_touch_value(session.last_touch),
                 reason="processing_failure",
             )
-        except (ProviderUnavailableError, ProviderInvocationError):
+        except (ProviderUnavailableError, ProviderInvocationError) as exc:
             error_category = "provider_failure"
             if provider_used is None:
                 provider_used = (
@@ -308,6 +310,8 @@ class ConversationOrchestrator:
                 wake_interaction_id = event.interaction_id
                 wake_reject_reason = "wake_provider_unavailable"
                 session.wake_buffer = WakeBufferState()
+            elif isinstance(event, GreetingRequestEvent):
+                tts_error = str(exc)
             else:
                 response_plan = self._fallback_response_service.build(
                     touch_interpretation=self._safe_touch_value(session.last_touch),
@@ -334,9 +338,11 @@ class ConversationOrchestrator:
                 session.conversation_history,
                 response_plan.spoken_text,
             )
-            tts_plan = await self._plan_tts(
+            tts_plan, planned_tts_error = await self._plan_tts(
                 session=session, response_plan=response_plan
             )
+            if planned_tts_error is not None:
+                tts_error = planned_tts_error
 
         await self._session_repository.save(session)
         await self._telemetry.publish(
@@ -369,6 +375,7 @@ class ConversationOrchestrator:
             wake_confidence=wake_confidence,
             wake_reject_reason=wake_reject_reason,
             audio_output_end=audio_output_end,
+            tts_error=tts_error,
         )
 
     async def _resolve_session(self, event: DeviceEvent) -> DeviceSessionContext | None:
@@ -504,17 +511,20 @@ class ConversationOrchestrator:
         *,
         session: DeviceSessionContext,
         response_plan: AIResponsePlan,
-    ) -> TtsSynthesisPlan | None:
+    ) -> tuple[TtsSynthesisPlan | None, str | None]:
         try:
-            return await self._tts.plan_synthesis(
-                TtsSynthesisRequest(
-                    device_id=session.device_id,
-                    session_id=session.session_id,
-                    text=response_plan.spoken_text,
-                    voice_style=response_plan.voice_style,
-                )
+            return (
+                await self._tts.plan_synthesis(
+                    TtsSynthesisRequest(
+                        device_id=session.device_id,
+                        session_id=session.session_id,
+                        text=response_plan.spoken_text,
+                        voice_style=response_plan.voice_style,
+                    )
+                ),
+                None,
             )
-        except (ProviderUnavailableError, ProviderInvocationError):
+        except (ProviderUnavailableError, ProviderInvocationError) as exc:
             await self._telemetry.publish(
                 TelemetryEvent(
                     event_name="tts_plan",
@@ -524,9 +534,10 @@ class ConversationOrchestrator:
                     orchestrator_phase="degraded",
                     provider=self._tts.provider_name,
                     error_category="tts_unavailable",
+                    details={"reason": str(exc)[:200]},
                 )
             )
-            return None
+            return None, str(exc)
 
     def _append_turn(
         self,

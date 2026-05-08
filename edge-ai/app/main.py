@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.debug_audio_routes import router as debug_audio_router
 from app.api.websocket_routes import router as websocket_router
 from app.config import get_settings
 from app.dependencies import get_connection_manager
@@ -55,6 +56,7 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if settings.docs_enabled else None,
         lifespan=lifespan,
     )
+    app.include_router(debug_audio_router)
     app.include_router(websocket_router)
 
     @app.get("/health", tags=["system"])

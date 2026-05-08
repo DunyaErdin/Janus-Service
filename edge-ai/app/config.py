@@ -33,9 +33,10 @@ class Settings(BaseSettings):
     wake_detector_provider: Literal["stt", "dev_fake", "disabled"] = "stt"
     gemini_api_key: str | None = None
     gemini_model_id: str = "configure-me"
-    gemini_stt_model_id: str = "gemini-2.5-flash"
+    gemini_stt_model_id: str = "gemini-3-flash-preview"
     gemini_tts_model_id: str = "gemini-3.1-flash-tts-preview"
     gemini_tts_voice_name: str = "Kore"
+    debug_audio_token: str | None = None
     request_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
     max_audio_chunks_per_session: int = Field(default=256, ge=16, le=4096)
     max_wake_chunks_per_interaction: int = Field(default=24, ge=1, le=128)

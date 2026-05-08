@@ -76,6 +76,13 @@ class CapturingTtsAdapter(TtsPort):
         )
 
 
+class UnavailableTtsAdapter(TtsPort):
+    provider_name = "unavailable_tts"
+
+    async def plan_synthesis(self, request: TtsSynthesisRequest) -> TtsSynthesisPlan:
+        raise ProviderUnavailableError("tts unavailable")
+
+
 class NoopTelemetry(TelemetryPort):
     async def publish(self, event: TelemetryEvent) -> None:
         return None
@@ -244,5 +251,90 @@ def test_empty_final_audio_chunk_uses_previously_buffered_audio() -> None:
         assert result.response_plan is not None
         assert stt.requests
         assert stt.requests[0].audio_chunks == ["AAAA"]
+
+    asyncio.run(scenario())
+
+
+def test_final_audio_reports_tts_error_when_synthesis_fails() -> None:
+    async def scenario() -> None:
+        orchestrator = ConversationOrchestrator(
+            llm=DummyLlmAdapter(),
+            stt=UnavailableSttAdapter(),
+            tts=UnavailableTtsAdapter(),
+            wake_detection=SttWakeDetectionService(UnavailableSttAdapter()),
+            greeting_service=GreetingService(UnavailableTtsAdapter()),
+            session_repository=InMemorySessionRepository(),
+            telemetry=NoopTelemetry(),
+            prompt_builder=PromptBuilder(robot_name="Janus", default_language="tr-TR"),
+            touch_interpreter=TouchInterpreter(),
+            response_validator=ResponseValidator(),
+            fallback_response_service=FallbackResponseService(),
+            max_audio_chunks_per_session=64,
+            max_wake_chunks_per_interaction=24,
+            max_wake_base64_chars_per_interaction=65536,
+            session_history_limit=20,
+        )
+
+        await orchestrator.handle_event(
+            SessionStartEvent(
+                device_id="janus-esp-01",
+                requested_session_id="session-1",
+                trigger="record_touch",
+            )
+        )
+        result = await orchestrator.handle_event(
+            AudioChunkEvent(
+                device_id="janus-esp-01",
+                session_id="session-1",
+                chunk_id=0,
+                encoding=AudioEncoding.PCM16,
+                sample_rate_hz=16000,
+                channels=1,
+                data_base64="AAAA",
+                is_final=True,
+            )
+        )
+
+        assert result.response_plan is not None
+        assert result.tts_plan is None
+        assert result.tts_error == "tts unavailable"
+
+    asyncio.run(scenario())
+
+
+def test_greeting_request_reports_tts_error_when_synthesis_fails() -> None:
+    async def scenario() -> None:
+        tts = UnavailableTtsAdapter()
+        orchestrator = ConversationOrchestrator(
+            llm=DummyLlmAdapter(),
+            stt=UnavailableSttAdapter(),
+            tts=tts,
+            wake_detection=SttWakeDetectionService(UnavailableSttAdapter()),
+            greeting_service=GreetingService(tts),
+            session_repository=InMemorySessionRepository(),
+            telemetry=NoopTelemetry(),
+            prompt_builder=PromptBuilder(robot_name="Janus", default_language="tr-TR"),
+            touch_interpreter=TouchInterpreter(),
+            response_validator=ResponseValidator(),
+            fallback_response_service=FallbackResponseService(),
+            max_audio_chunks_per_session=64,
+            max_wake_chunks_per_interaction=24,
+            max_wake_base64_chars_per_interaction=65536,
+            session_history_limit=20,
+        )
+
+        result = await orchestrator.handle_event(
+            GreetingRequestEvent(
+                device_id="janus-esp-01",
+                interaction_id="wake-1",
+                text="Size nasıl yardımcı olabilirim?",
+                sample_rate_hz=24000,
+                channels=1,
+            )
+        )
+
+        assert result.tts_plan is None
+        assert result.response_plan is None
+        assert result.tts_error == "tts unavailable"
 
     asyncio.run(scenario())
