@@ -15,6 +15,7 @@ def main() -> None:
         log_config=None,
         proxy_headers=settings.proxy_headers,
         forwarded_allow_ips=settings.forwarded_allow_ips,
+        ws="websockets",
         ws_max_size=settings.websocket_max_message_bytes,
         ws_ping_interval=settings.websocket_ping_interval_seconds,
         ws_ping_timeout=settings.websocket_ping_timeout_seconds,
