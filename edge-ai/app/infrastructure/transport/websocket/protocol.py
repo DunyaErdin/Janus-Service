@@ -40,7 +40,7 @@ from app.schemas.websocket_messages import (
 )
 
 _INCOMING_MESSAGE_ADAPTER = TypeAdapter(IncomingDeviceMessage)
-_AUDIO_OUTPUT_CHUNK_BASE64_CHARS = 2048
+_AUDIO_OUTPUT_CHUNK_BASE64_CHARS = 512
 
 
 class ProtocolDecodeError(ValueError):
