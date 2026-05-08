@@ -2,29 +2,42 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from app.application.orchestrators.conversation_orchestrator import ConversationOrchestrator
+from app.application.orchestrators.conversation_orchestrator import (
+    ConversationOrchestrator,
+)
 from app.application.services.fallback_response_service import FallbackResponseService
+from app.application.services.greeting_service import GreetingService
 from app.application.services.prompt_builder import PromptBuilder
 from app.application.services.response_validator import ResponseValidator
 from app.application.services.touch_interpreter import TouchInterpreter
+from app.application.services.wake_detection_service import (
+    DevFakeWakeDetectionService,
+    DisabledWakeDetectionService,
+    SttWakeDetectionService,
+)
 from app.config import get_settings
 from app.domain.ports.llm_port import LlmPort
 from app.domain.ports.session_repository_port import DeviceSessionRepositoryPort
 from app.domain.ports.stt_port import SttPort
 from app.domain.ports.telemetry_port import TelemetryPort
 from app.domain.ports.tts_port import TtsPort
+from app.domain.ports.wake_detection_port import WakeDetectionService
 from app.infrastructure.adapters.llm.gemini_llm_adapter import GeminiLlmAdapter
 from app.infrastructure.adapters.llm.mock_llm_adapter import MockLlmAdapter
 from app.infrastructure.adapters.repositories.in_memory_session_repository import (
     InMemorySessionRepository,
 )
 from app.infrastructure.adapters.stt.gemini_stt_adapter import GeminiSttAdapter
-from app.infrastructure.adapters.stt.placeholder_stt_adapter import PlaceholderSttAdapter
+from app.infrastructure.adapters.stt.placeholder_stt_adapter import (
+    PlaceholderSttAdapter,
+)
 from app.infrastructure.adapters.telemetry.json_logger_telemetry_adapter import (
     JsonLoggerTelemetryAdapter,
 )
 from app.infrastructure.adapters.tts.gemini_tts_adapter import GeminiTtsAdapter
-from app.infrastructure.adapters.tts.placeholder_tts_adapter import PlaceholderTtsAdapter
+from app.infrastructure.adapters.tts.placeholder_tts_adapter import (
+    PlaceholderTtsAdapter,
+)
 from app.infrastructure.transport.websocket.connection_manager import ConnectionManager
 
 
@@ -109,12 +122,29 @@ def get_tts_adapter() -> TtsPort:
 
 
 @lru_cache
+def get_wake_detection_service() -> WakeDetectionService:
+    settings = get_settings()
+    if settings.wake_detector_provider == "dev_fake":
+        return DevFakeWakeDetectionService()
+    if settings.wake_detector_provider == "disabled":
+        return DisabledWakeDetectionService()
+    return SttWakeDetectionService(get_stt_adapter())
+
+
+@lru_cache
+def get_greeting_service() -> GreetingService:
+    return GreetingService(get_tts_adapter())
+
+
+@lru_cache
 def get_conversation_orchestrator() -> ConversationOrchestrator:
     settings = get_settings()
     return ConversationOrchestrator(
         llm=get_llm_adapter(),
         stt=get_stt_adapter(),
         tts=get_tts_adapter(),
+        wake_detection=get_wake_detection_service(),
+        greeting_service=get_greeting_service(),
         session_repository=get_session_repository(),
         telemetry=get_telemetry_adapter(),
         prompt_builder=get_prompt_builder(),
@@ -122,5 +152,7 @@ def get_conversation_orchestrator() -> ConversationOrchestrator:
         response_validator=get_response_validator(),
         fallback_response_service=get_fallback_response_service(),
         max_audio_chunks_per_session=settings.max_audio_chunks_per_session,
+        max_wake_chunks_per_interaction=settings.max_wake_chunks_per_interaction,
+        max_wake_base64_chars_per_interaction=settings.max_wake_base64_chars_per_interaction,
         session_history_limit=settings.session_history_limit,
     )

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://janus.local/schemas/device-protocol-1.1.json",
+  "title": "Janus Device Protocol",
+  "type": "object",
+  "required": ["message_type", "device_id"],
+  "properties": {
+    "message_type": {
+      "type": "string",
+      "enum": [
+        "hello",
+        "heartbeat",
+        "wake_listening_started",
+        "wake_audio_chunk",
+        "wake_detected",
+        "wake_rejected",
+        "greeting_request",
+        "audio_output_chunk",
+        "audio_output_end",
+        "session_start",
+        "audio_chunk",
+        "session_end",
+        "ai_response_plan",
+        "error",
+        "ack",
+        "status",
+        "touch_event"
+      ]
+    },
+    "device_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "interaction_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "chunk_id": { "type": "integer", "minimum": 0 },
+    "encoding": { "type": "string", "enum": ["pcm16"] },
+    "sample_rate_hz": { "type": "integer", "minimum": 8000, "maximum": 96000 },
+    "channels": { "type": "integer", "minimum": 1, "maximum": 2 },
+    "data_base64": { "type": "string" },
+    "is_final": { "type": "boolean" },
+    "protocol_version": { "type": "string", "const": "1.1" }
+  },
+  "additionalProperties": true
+}

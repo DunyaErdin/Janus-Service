@@ -33,6 +33,18 @@ class AudioBufferState(BaseModel):
     buffered_chunks: list[str] = Field(default_factory=list)
 
 
+class WakeBufferState(BaseModel):
+    interaction_id: str | None = Field(default=None, max_length=128)
+    chunk_count: int = Field(default=0, ge=0)
+    next_chunk_id: int = Field(default=0, ge=0)
+    last_chunk_at: datetime | None = None
+    encoding: str | None = Field(default=None, max_length=32)
+    sample_rate_hz: int | None = Field(default=None, ge=8000, le=96000)
+    channels: int | None = Field(default=None, ge=1, le=2)
+    final_chunk_received: bool = False
+    buffered_chunks: list[str] = Field(default_factory=list)
+
+
 class DeviceSessionContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -46,5 +58,6 @@ class DeviceSessionContext(BaseModel):
     last_touch: TouchContext | None = None
     touch_history: list[TouchContext] = Field(default_factory=list)
     audio_buffer: AudioBufferState = Field(default_factory=AudioBufferState)
+    wake_buffer: WakeBufferState = Field(default_factory=WakeBufferState)
     conversation_history: list[ConversationTurn] = Field(default_factory=list)
     metadata: dict[str, str] = Field(default_factory=dict)

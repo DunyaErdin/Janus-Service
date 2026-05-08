@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.debug_audio_routes import router as debug_audio_router
 from app.api.websocket_routes import router as websocket_router
 from app.config import get_settings
 from app.dependencies import get_connection_manager
@@ -24,6 +25,9 @@ def create_app() -> FastAPI:
                 "structured": {
                     "environment": settings.environment,
                     "llm_provider": settings.llm_provider,
+                    "stt_provider": settings.stt_provider,
+                    "tts_provider": settings.tts_provider,
+                    "wake_detector_provider": settings.wake_detector_provider,
                     "websocket_path": settings.websocket_path,
                     "docs_enabled": settings.docs_enabled,
                 }
@@ -52,6 +56,7 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if settings.docs_enabled else None,
         lifespan=lifespan,
     )
+    app.include_router(debug_audio_router)
     app.include_router(websocket_router)
 
     @app.get("/health", tags=["system"])
@@ -60,6 +65,28 @@ def create_app() -> FastAPI:
             "status": "ok",
             "service": settings.app_name,
             "environment": settings.environment,
+        }
+
+    @app.get("/ready", tags=["system"])
+    async def readycheck() -> dict[str, str | bool]:
+        providers_configured = (
+            settings.wake_detector_provider == "dev_fake"
+            or settings.wake_detector_provider == "disabled"
+            or bool(settings.gemini_api_key)
+        )
+        return {
+            "status": "ready" if providers_configured else "degraded",
+            "service": settings.app_name,
+            "wake_detector_provider": settings.wake_detector_provider,
+            "provider_credentials_present": providers_configured,
+        }
+
+    @app.get("/version", tags=["system"])
+    async def version() -> dict[str, str]:
+        return {
+            "service": settings.app_name,
+            "version": "0.1.0",
+            "device_protocol_version": "1.1",
         }
 
     return app

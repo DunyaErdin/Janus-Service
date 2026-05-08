@@ -97,8 +97,8 @@ class GeminiSttAdapter(SttPort):
                     "role": "user",
                     "parts": [
                         {
-                            "inline_data": {
-                                "mime_type": "audio/wav",
+                            "inlineData": {
+                                "mimeType": "audio/wav",
                                 "data": audio_b64,
                             }
                         },

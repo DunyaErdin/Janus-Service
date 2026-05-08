@@ -15,7 +15,7 @@ Production-oriented Python edge orchestration service for a home assistant robot
 - Validation and fallback role:
   Raw provider output is parsed into a strict schema, semantically validated, and replaced with a safe fallback plan when output is malformed or unsafe.
 - Current placeholders:
-  Real STT, real TTS synthesis dispatch, persistent session storage, external telemetry export, and stronger device authentication are still placeholder or phase-2 work.
+  Persistent session storage, external telemetry export, and stronger device authentication are still phase-2 work. Gemini STT/TTS adapters are present, but require provider credentials and smoke testing in the target deployment.
 
 ## What The Service Does
 
@@ -39,6 +39,7 @@ Production-oriented Python edge orchestration service for a home assistant robot
 - Structured JSON schema parsing for LLM output
 - Semantic validation and safe fallback services
 - Provider boundary through `LlmPort`, `SttPort`, `TtsPort`, `TelemetryPort`, and `DeviceSessionRepositoryPort`
+- Wake boundary through `WakeDetectionService`, with STT-based production detection and an explicit dev fake only for tests.
 
 ## ESP Connectivity Contract
 
@@ -128,11 +129,22 @@ These are the currently used runtime settings:
 - `EDGE_AI_DEFAULT_LANGUAGE`
 - `EDGE_AI_WEBSOCKET_PATH`
 - `EDGE_AI_ALLOWED_DEVICE_IDS`
+- `EDGE_AI_DEVICE_AUTH_TOKEN`
+- `EDGE_AI_DEBUG_AUDIO_TOKEN`
 - `EDGE_AI_LLM_PROVIDER`
+- `EDGE_AI_STT_PROVIDER`
+- `EDGE_AI_TTS_PROVIDER`
+- `EDGE_AI_WAKE_DETECTOR_PROVIDER`
 - `EDGE_AI_GEMINI_API_KEY`
 - `EDGE_AI_GEMINI_MODEL_ID`
+- `EDGE_AI_GEMINI_STT_MODEL_ID`
+- `EDGE_AI_GEMINI_TTS_MODEL_ID`
+- `EDGE_AI_GEMINI_TTS_VOICE_NAME`
 - `EDGE_AI_REQUEST_TIMEOUT_SECONDS`
 - `EDGE_AI_MAX_AUDIO_CHUNKS_PER_SESSION`
+- `EDGE_AI_MAX_WAKE_CHUNKS_PER_INTERACTION`
+- `EDGE_AI_MAX_WAKE_BASE64_CHARS_PER_INTERACTION`
+- `EDGE_AI_DEBUG_STORE_RAW_WAKE_AUDIO`
 - `EDGE_AI_SESSION_HISTORY_LIMIT`
 - `EDGE_AI_WEBSOCKET_HELLO_TIMEOUT_SECONDS`
 - `EDGE_AI_WEBSOCKET_RECEIVE_TIMEOUT_SECONDS`
@@ -174,7 +186,69 @@ Health endpoint:
 
 ```text
 GET /health
+GET /ready
+GET /version
 ```
+
+## Debug Audio Smoke Tests
+
+Debug audio endpoints are disabled until `EDGE_AI_DEBUG_AUDIO_TOKEN` is set.
+They are intended for private deployment checks only.
+
+Generate a WAV file directly from Gemini TTS:
+
+```bash
+curl -X POST http://localhost:8080/debug/tts \
+  -H "Content-Type: application/json" \
+  -H "x-janus-debug-token: $EDGE_AI_DEBUG_AUDIO_TOKEN" \
+  -d '{"text":"Merhaba, Janus ses testi.","voice_style":"warm"}' \
+  --output janus-debug-tts.wav
+```
+
+Exercise the manual transcript -> mock response -> TTS path:
+
+```bash
+curl -X POST http://localhost:8080/debug/response-audio \
+  -H "Content-Type: application/json" \
+  -H "x-janus-debug-token: $EDGE_AI_DEBUG_AUDIO_TOKEN" \
+  -d '{"transcript":"Selam, beni duyuyor musun?"}'
+```
+
+For the first Railway audio MVP use:
+
+```text
+EDGE_AI_LLM_PROVIDER=mock
+EDGE_AI_STT_PROVIDER=gemini
+EDGE_AI_TTS_PROVIDER=gemini
+EDGE_AI_WAKE_DETECTOR_PROVIDER=stt
+EDGE_AI_GEMINI_STT_MODEL_ID=gemini-3-flash-preview
+EDGE_AI_GEMINI_TTS_MODEL_ID=gemini-3.1-flash-tts-preview
+```
+
+The deployed URL should return this app's JSON shapes from `/health`, `/ready`,
+and `/version` before flashing firmware against its `/ws/device` endpoint.
+
+WebSocket greeting smoke test:
+
+```powershell
+.\scripts\smoke-websocket-greeting.ps1 `
+  -WsUrl "wss://<edge-ai-domain>/ws/device" `
+  -OutputPath "janus-greeting-smoke.wav"
+```
+
+## Hey Janus Wake Flow
+
+Firmware sends bounded `wake_audio_chunk` windows while idle. The local firmware
+prefilter only reduces traffic; it does not confirm wake. This service confirms
+the wake phrase with `WakeDetectionService` and sends `wake_detected` or
+`wake_rejected`.
+
+After `wake_detected`, firmware sends `greeting_request`. The service synthesizes
+`Size nasıl yardımcı olabilirim?` through `TtsPort` and returns bounded
+`audio_output_chunk` messages followed by `audio_output_end`.
+
+Use `EDGE_AI_WAKE_DETECTOR_PROVIDER=stt` for production. The `dev_fake` provider
+is deterministic test tooling and is not production wake-word recognition.
 
 ## Docker Deployment
 
@@ -251,11 +325,11 @@ Telemetry logging redacts common secret-shaped keys such as token, secret, autho
 - Receive timeout and stale connection cleanup
 - Typed ack and error responses
 - Safe fallback behavior on orchestration or provider failure
+- Gemini STT adapter for bounded PCM16 microphone chunks
+- Gemini TTS adapter returning PCM16 audio downlink chunks for ESP playback
 
 ## Placeholder Or Not Yet Complete
 
-- Real STT transcription provider
-- Real TTS generation and playback artifact delivery
 - Fully validated Gemini production rollout under real traffic
 - Persistent session repository for multi-process or multi-instance deployment
 - External metrics or tracing backend
@@ -266,6 +340,5 @@ Telemetry logging redacts common secret-shaped keys such as token, secret, autho
 - Add persistent session and device repository
 - Add proper WebSocket authentication and device provisioning
 - Add distributed connection coordination if scaling beyond one worker
-- Add real STT and TTS provider adapters
 - Add external telemetry export such as OpenTelemetry, Loki, or ELK
 - Add rollout-safe provider retry and circuit breaker policies

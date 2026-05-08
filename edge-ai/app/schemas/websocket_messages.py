@@ -73,7 +73,9 @@ class TouchEventMessage(MessageBase):
             return self
 
         if self.sensor is None or self.pressed is None:
-            raise ValueError("touch_event must include either touch or sensor/pressed fields.")
+            raise ValueError(
+                "touch_event must include either touch or sensor/pressed fields."
+            )
 
         self.touch = TouchContext(
             sensor=_map_touch_sensor(self.sensor),
@@ -90,9 +92,63 @@ class AudioChunkMessage(MessageBase):
     encoding: AudioEncoding
     sample_rate_hz: int = Field(ge=8000, le=96000)
     channels: int = Field(default=1, ge=1, le=2)
-    data_base64: str = Field(min_length=1)
+    data_base64: str = ""
     is_final: bool = False
     sent_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="after")
+    def require_audio_payload_before_final(self) -> "AudioChunkMessage":
+        if not self.is_final and not self.data_base64:
+            raise ValueError(
+                "audio_chunk must include data_base64 unless it is the final marker."
+            )
+        return self
+
+
+class WakeListeningStartedMessage(MessageBase):
+    message_type: Literal["wake_listening_started"] = "wake_listening_started"
+    device_id: str = Field(min_length=1, max_length=128)
+    interaction_id: str = Field(min_length=1, max_length=128)
+    encoding: AudioEncoding
+    sample_rate_hz: int = Field(ge=8000, le=96000)
+    channels: int = Field(default=1, ge=1, le=2)
+    window_ms: int = Field(default=1024, ge=100, le=5000)
+    prefilter: str | None = Field(default=None, max_length=64)
+
+
+class WakeAudioChunkMessage(MessageBase):
+    message_type: Literal["wake_audio_chunk"] = "wake_audio_chunk"
+    device_id: str = Field(min_length=1, max_length=128)
+    interaction_id: str = Field(min_length=1, max_length=128)
+    chunk_id: int = Field(ge=0)
+    encoding: AudioEncoding
+    sample_rate_hz: int = Field(ge=8000, le=96000)
+    channels: int = Field(default=1, ge=1, le=2)
+    data_base64: str = ""
+    is_final: bool = False
+    rms: int | None = Field(default=None, ge=0)
+    peak_abs: int | None = Field(default=None, ge=0, le=32768)
+    sent_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="after")
+    def require_payload_before_final(self) -> "WakeAudioChunkMessage":
+        if not self.is_final and not self.data_base64:
+            raise ValueError(
+                "wake_audio_chunk must include data_base64 unless it is final."
+            )
+        return self
+
+
+class GreetingRequestMessage(MessageBase):
+    message_type: Literal["greeting_request"] = "greeting_request"
+    device_id: str = Field(min_length=1, max_length=128)
+    interaction_id: str = Field(min_length=1, max_length=128)
+    text: str = Field(
+        default="Size nasıl yardımcı olabilirim?", min_length=1, max_length=120
+    )
+    encoding: str = Field(default="pcm16", max_length=32)
+    sample_rate_hz: int = Field(default=24000, ge=8000, le=96000)
+    channels: int = Field(default=1, ge=1, le=2)
 
 
 class SessionStartMessage(MessageBase):
@@ -192,12 +248,56 @@ class AudioOutputMessage(MessageBase):
     server_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class AudioOutputChunkMessage(MessageBase):
+    message_type: Literal["audio_output_chunk"] = "audio_output_chunk"
+    device_id: str = Field(min_length=1, max_length=128)
+    session_id: str = Field(min_length=1, max_length=128)
+    interaction_id: str | None = Field(default=None, max_length=128)
+    chunk_id: int = Field(ge=0)
+    encoding: str = Field(min_length=1, max_length=32)
+    sample_rate_hz: int = Field(ge=8000, le=96000)
+    channels: int = Field(default=1, ge=1, le=2)
+    data_base64: str = Field(min_length=1)
+    is_final: bool = False
+    mime_type: str | None = Field(default=None, max_length=64)
+    server_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class AudioOutputEndMessage(MessageBase):
+    message_type: Literal["audio_output_end"] = "audio_output_end"
+    device_id: str = Field(min_length=1, max_length=128)
+    session_id: str | None = Field(default=None, max_length=128)
+    interaction_id: str | None = Field(default=None, max_length=128)
+    reason: str = Field(default="completed", max_length=64)
+    server_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class WakeDetectedMessage(MessageBase):
+    message_type: Literal["wake_detected"] = "wake_detected"
+    device_id: str = Field(min_length=1, max_length=128)
+    interaction_id: str = Field(min_length=1, max_length=128)
+    transcript: str | None = Field(default=None, max_length=240)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    server_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class WakeRejectedMessage(MessageBase):
+    message_type: Literal["wake_rejected"] = "wake_rejected"
+    device_id: str = Field(min_length=1, max_length=128)
+    interaction_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(default="not_wake_word", max_length=128)
+    server_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 IncomingDeviceMessage = Annotated[
     Union[
         HelloMessage,
         HeartbeatMessage,
         TouchEventMessage,
         AudioChunkMessage,
+        WakeListeningStartedMessage,
+        WakeAudioChunkMessage,
+        GreetingRequestMessage,
         SessionStartMessage,
         SessionEndMessage,
         StatusMessage,
@@ -206,6 +306,15 @@ IncomingDeviceMessage = Annotated[
 ]
 
 OutgoingDeviceMessage = Annotated[
-    Union[AckMessage, AIResponsePlanMessage, ErrorMessage, AudioOutputMessage],
+    Union[
+        AckMessage,
+        AIResponsePlanMessage,
+        ErrorMessage,
+        AudioOutputMessage,
+        AudioOutputChunkMessage,
+        AudioOutputEndMessage,
+        WakeDetectedMessage,
+        WakeRejectedMessage,
+    ],
     Field(discriminator="message_type"),
 ]
