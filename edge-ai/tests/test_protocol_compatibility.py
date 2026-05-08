@@ -118,13 +118,14 @@ def test_audio_output_chunk_messages_split_base64_on_safe_boundaries() -> None:
     )
     payloads = [serialize_outgoing_message(message) for message in messages]
 
-    assert len(messages) == 3
+    assert len(messages) == 9
     assert all(len(message.data_base64) % 4 == 0 for message in messages)
+    assert all(len(message.data_base64) <= 512 for message in messages)
     assert '"message_type":"audio_output_chunk"' in payloads[0]
     assert '"chunk_id":0' in payloads[0]
     assert '"is_final":false' in payloads[0]
-    assert '"chunk_id":2' in payloads[2]
-    assert '"is_final":true' in payloads[2]
+    assert '"chunk_id":8' in payloads[8]
+    assert '"is_final":true' in payloads[8]
 
 
 def test_wake_audio_chunk_shape_is_accepted() -> None:
