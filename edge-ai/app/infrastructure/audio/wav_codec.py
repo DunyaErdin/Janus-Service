@@ -44,3 +44,26 @@ def pcm16le_to_wav_bytes(
         wav_file.setframerate(sample_rate_hz)
         wav_file.writeframes(pcm_bytes)
     return wav_buffer.getvalue()
+
+
+def wav_bytes_to_pcm16le(wav_bytes: bytes) -> tuple[bytes, int, int]:
+    if not wav_bytes:
+        raise ValueError("WAV audio payload must not be empty.")
+
+    wav_buffer = io.BytesIO(wav_bytes)
+    with wave.open(wav_buffer, "rb") as wav_file:
+        channels = wav_file.getnchannels()
+        sample_width = wav_file.getsampwidth()
+        sample_rate_hz = wav_file.getframerate()
+        pcm_bytes = wav_file.readframes(wav_file.getnframes())
+
+    if channels not in {1, 2}:
+        raise ValueError("Only mono and stereo WAV encoding are supported.")
+    if sample_width != 2:
+        raise ValueError("Only PCM16 WAV audio is supported.")
+    if sample_rate_hz < 8_000 or sample_rate_hz > 96_000:
+        raise ValueError("Sample rate is outside the supported WAV range.")
+    if not pcm_bytes:
+        raise ValueError("WAV audio payload did not include PCM frames.")
+
+    return pcm_bytes, sample_rate_hz, channels

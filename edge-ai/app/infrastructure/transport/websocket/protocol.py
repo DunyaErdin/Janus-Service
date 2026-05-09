@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import binascii
+
 from pydantic import TypeAdapter, ValidationError
 
 from app.domain.models.ai_response_plan import AIResponsePlan
@@ -22,6 +25,7 @@ from app.schemas.websocket_messages import (
     AudioOutputMessage,
     AudioOutputChunkMessage,
     AudioOutputEndMessage,
+    AudioOutputStartMessage,
     AudioChunkMessage,
     ErrorMessage,
     GreetingRequestMessage,
@@ -40,7 +44,10 @@ from app.schemas.websocket_messages import (
 )
 
 _INCOMING_MESSAGE_ADAPTER = TypeAdapter(IncomingDeviceMessage)
-_AUDIO_OUTPUT_CHUNK_BASE64_CHARS = 512
+_AUDIO_OUTPUT_CHUNK_BYTES = 1536
+_AUDIO_OUTPUT_SAMPLE_RATE_HZ = 24_000
+_AUDIO_OUTPUT_CHANNELS = 1
+_AUDIO_OUTPUT_SAMPLE_FORMAT = "s16le"
 
 
 class ProtocolDecodeError(ValueError):
@@ -254,27 +261,51 @@ def build_audio_output_message(
     )
 
 
+def build_audio_output_start_message(
+    *,
+    device_id: str,
+    session_id: str,
+    interaction_id: str | None,
+    correlation_id: str | None,
+    chunk_size_bytes: int = _AUDIO_OUTPUT_CHUNK_BYTES,
+) -> AudioOutputStartMessage:
+    if chunk_size_bytes != _AUDIO_OUTPUT_CHUNK_BYTES:
+        raise ValueError(f"audio output chunk_size_bytes must be {_AUDIO_OUTPUT_CHUNK_BYTES}.")
+    return AudioOutputStartMessage(
+        device_id=device_id,
+        session_id=session_id,
+        interaction_id=interaction_id,
+        correlation_id=correlation_id,
+        sample_rate_hz=_AUDIO_OUTPUT_SAMPLE_RATE_HZ,
+        channels=_AUDIO_OUTPUT_CHANNELS,
+        sample_format=_AUDIO_OUTPUT_SAMPLE_FORMAT,
+        chunk_size_bytes=chunk_size_bytes,
+    )
+
+
 def build_audio_output_chunk_messages(
     *,
     device_id: str,
     session_id: str,
     correlation_id: str | None,
-    encoding: str,
-    sample_rate_hz: int,
-    channels: int,
     data_base64: str,
-    mime_type: str | None,
+    chunk_size_bytes: int = _AUDIO_OUTPUT_CHUNK_BYTES,
 ) -> list[AudioOutputChunkMessage]:
     normalized_audio = "".join(data_base64.split())
-    chunk_width = _AUDIO_OUTPUT_CHUNK_BASE64_CHARS
-    chunk_width -= chunk_width % 4
-    if chunk_width <= 0:
-        raise ValueError("audio output chunk width must be a positive base64 multiple.")
+    try:
+        pcm_bytes = base64.b64decode(normalized_audio, validate=True)
+    except binascii.Error as exc:
+        raise ValueError("audio output payload must be valid base64 PCM16.") from exc
+
+    if len(pcm_bytes) == 0 or len(pcm_bytes) % 2 != 0:
+        raise ValueError("audio output payload must be non-empty PCM16 with even byte length.")
+    if chunk_size_bytes <= 0 or chunk_size_bytes % 2 != 0:
+        raise ValueError("audio output chunk_size_bytes must be a positive multiple of 2.")
 
     chunks = [
-        normalized_audio[start : start + chunk_width]
-        for start in range(0, len(normalized_audio), chunk_width)
-        if normalized_audio[start : start + chunk_width]
+        pcm_bytes[start : start + chunk_size_bytes]
+        for start in range(0, len(pcm_bytes), chunk_size_bytes)
+        if pcm_bytes[start : start + chunk_size_bytes]
     ]
 
     return [
@@ -284,12 +315,8 @@ def build_audio_output_chunk_messages(
             interaction_id=session_id if session_id.startswith("wake-") else None,
             correlation_id=correlation_id,
             chunk_id=index,
-            encoding=encoding,
-            sample_rate_hz=sample_rate_hz,
-            channels=channels,
-            data_base64=chunk,
+            data_base64=base64.b64encode(chunk).decode("ascii"),
             is_final=index == len(chunks) - 1,
-            mime_type=mime_type,
         )
         for index, chunk in enumerate(chunks)
     ]
@@ -342,4 +369,3 @@ def build_audio_output_end_message(
         correlation_id=correlation_id,
         reason=reason,
     )
-    (GreetingRequestMessage,)
