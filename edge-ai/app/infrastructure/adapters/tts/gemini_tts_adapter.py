@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 from typing import Any
 
 import httpx
@@ -11,6 +13,12 @@ from app.domain.ports.provider_errors import (
     ProviderUnavailableError,
 )
 from app.domain.ports.tts_port import TtsPort, TtsSynthesisPlan, TtsSynthesisRequest
+from app.infrastructure.audio.tts_normalizer import (
+    PcmProviderMetadata,
+    encode_normalized_audio,
+    normalize_tts_provider_audio,
+    parse_pcm_metadata_from_content_type,
+)
 
 _STYLE_DIRECTIVES: dict[VoiceStyle, str] = {
     VoiceStyle.CALM: "Speak calmly and clearly.",
@@ -149,12 +157,38 @@ class GeminiTtsAdapter(TtsPort):
             raise ProviderInvocationError("Gemini TTS response did not include audio bytes.")
 
         mime_type = inline_data.get("mimeType")
+        normalized_mime_type = mime_type if isinstance(mime_type, str) else None
+        try:
+            audio_bytes = base64.b64decode(audio_b64, validate=True)
+            pcm_metadata = parse_pcm_metadata_from_content_type(normalized_mime_type)
+            if pcm_metadata is None and _is_gemini_pcm_content_type(normalized_mime_type):
+                pcm_metadata = PcmProviderMetadata(
+                    sample_rate_hz=24_000,
+                    channels=1,
+                    sample_format="s16le",
+                )
+            normalized = normalize_tts_provider_audio(
+                provider_audio=audio_bytes,
+                content_type=normalized_mime_type,
+                provider=self.provider_name,
+                pcm_metadata=pcm_metadata,
+            )
+        except (binascii.Error, ValueError) as exc:
+            raise ProviderInvocationError(
+                "Gemini TTS returned audio that could not be normalized to PCM16 mono 24000 Hz."
+            ) from exc
+
         return TtsSynthesisPlan(
             provider=self.provider_name,
             status="generated",
             encoding="pcm16",
-            sample_rate_hz=24_000,
-            channels=1,
-            data_base64=audio_b64,
-            mime_type=mime_type if isinstance(mime_type, str) else "audio/L16;rate=24000",
+            sample_rate_hz=normalized.sample_rate_hz,
+            channels=normalized.channels,
+            data_base64=encode_normalized_audio(normalized),
+            mime_type=normalized.mime_type,
         )
+
+
+def _is_gemini_pcm_content_type(content_type: str | None) -> bool:
+    lower = (content_type or "").lower()
+    return "audio/l16" in lower or "audio/pcm" in lower or "pcm" in lower

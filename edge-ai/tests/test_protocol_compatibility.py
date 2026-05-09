@@ -1,3 +1,4 @@
+import base64
 import json
 
 from app.domain.enums.emotion import Emotion
@@ -20,6 +21,7 @@ from app.infrastructure.transport.websocket.protocol import (
     build_audio_output_chunk_messages,
     build_audio_output_end_message,
     build_audio_output_message,
+    build_audio_output_start_message,
     build_error_message,
     build_wake_detected_message,
     build_wake_rejected_message,
@@ -107,26 +109,25 @@ def test_audio_output_message_serializes_pcm_payload() -> None:
 
 
 def test_audio_output_chunk_messages_split_base64_on_safe_boundaries() -> None:
+    pcm = b"\x01\x00" * 2_000
     messages = build_audio_output_chunk_messages(
         device_id="janus-esp-01",
         session_id="session-1",
         correlation_id="corr-4",
-        encoding="pcm16",
-        sample_rate_hz=24000,
-        channels=1,
-        data_base64="A" * 4096 + "B" * 8,
-        mime_type="audio/L16;rate=24000",
+        data_base64=base64.b64encode(pcm).decode("ascii"),
     )
     payloads = [serialize_outgoing_message(message) for message in messages]
 
-    assert len(messages) == 9
-    assert all(len(message.data_base64) % 4 == 0 for message in messages)
-    assert all(len(message.data_base64) <= 512 for message in messages)
+    assert len(messages) == 3
+    assert all(len(base64.b64decode(message.data_base64)) % 2 == 0 for message in messages)
+    assert all(len(base64.b64decode(message.data_base64)) <= 1536 for message in messages)
     assert '"message_type":"audio_output_chunk"' in payloads[0]
     assert '"chunk_id":0' in payloads[0]
     assert '"is_final":false' in payloads[0]
-    assert '"chunk_id":8' in payloads[8]
-    assert '"is_final":true' in payloads[8]
+    assert '"sample_rate_hz"' not in payloads[0]
+    assert '"encoding"' not in payloads[0]
+    assert '"chunk_id":2' in payloads[2]
+    assert '"is_final":true' in payloads[2]
 
 
 def test_audio_output_chunk_pacing_tracks_pcm_duration() -> None:
@@ -134,14 +135,41 @@ def test_audio_output_chunk_pacing_tracks_pcm_duration() -> None:
         device_id="janus-esp-01",
         session_id="session-1",
         correlation_id="corr-4",
-        encoding="pcm16",
-        sample_rate_hz=24000,
-        channels=1,
-        data_base64="A" * 512,
-        mime_type="audio/L16;rate=24000",
+        data_base64=base64.b64encode(b"\x00\x00" * 768).decode("ascii"),
     )[0]
 
-    assert _audio_output_chunk_sleep_seconds(message) == 0.008
+    assert _audio_output_chunk_sleep_seconds(message) == 0.032
+
+
+def test_audio_output_start_declares_single_speaker_contract() -> None:
+    payload = serialize_outgoing_message(
+        build_audio_output_start_message(
+            device_id="janus-esp-01",
+            session_id="session-1",
+            interaction_id=None,
+            correlation_id="corr-4",
+        )
+    )
+
+    assert '"message_type":"audio_output_start"' in payload
+    assert '"sample_rate_hz":24000' in payload
+    assert '"channels":1' in payload
+    assert '"sample_format":"s16le"' in payload
+    assert '"chunk_size_bytes":1536' in payload
+
+
+def test_audio_output_chunk_rejects_odd_pcm_payload() -> None:
+    try:
+        build_audio_output_chunk_messages(
+            device_id="janus-esp-01",
+            session_id="session-1",
+            correlation_id=None,
+            data_base64=base64.b64encode(b"\x00").decode("ascii"),
+        )
+    except ValueError as exc:
+        assert "even byte length" in str(exc)
+    else:
+        raise AssertionError("odd PCM payload should be rejected")
 
 
 def test_wake_audio_chunk_shape_is_accepted() -> None:

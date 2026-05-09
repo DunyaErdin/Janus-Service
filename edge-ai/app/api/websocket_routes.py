@@ -20,6 +20,7 @@ from app.infrastructure.transport.websocket.protocol import (
     build_ack_message,
     build_audio_output_end_message,
     build_audio_output_chunk_messages,
+    build_audio_output_start_message,
     build_ai_response_message,
     build_error_message,
     build_wake_detected_message,
@@ -229,34 +230,48 @@ async def device_websocket(
                     audio_session_id is not None
                     and result.tts_plan is not None
                     and result.tts_plan.data_base64 is not None
-                    and result.tts_plan.encoding is not None
-                    and result.tts_plan.sample_rate_hz is not None
-                    and result.tts_plan.channels is not None
                 ):
-                    for audio_message in build_audio_output_chunk_messages(
-                        device_id=domain_event.device_id,
-                        session_id=audio_session_id,
-                        correlation_id=domain_event.correlation_id,
-                        encoding=result.tts_plan.encoding,
-                        sample_rate_hz=result.tts_plan.sample_rate_hz,
-                        channels=result.tts_plan.channels,
-                        data_base64=result.tts_plan.data_base64,
-                        mime_type=result.tts_plan.mime_type,
-                    ):
-                        await connection_manager.send_to_socket(
-                            websocket, audio_message
-                        )
-                        await _pace_audio_output_chunk(audio_message)
-                    if result.audio_output_end:
+                    if not _tts_plan_matches_speaker_contract(result.tts_plan):
                         await connection_manager.send_to_socket(
                             websocket,
-                            build_audio_output_end_message(
+                            build_error_message(
+                                code="audio.contract_violation",
+                                message="TTS audio was not normalized to PCM16 mono 24000 Hz.",
+                                retryable=False,
+                                device_id=domain_event.device_id,
+                                correlation_id=domain_event.correlation_id,
+                            ),
+                        )
+                    else:
+                        await connection_manager.send_to_socket(
+                            websocket,
+                            build_audio_output_start_message(
                                 device_id=domain_event.device_id,
                                 session_id=audio_session_id,
                                 interaction_id=result.wake_interaction_id,
                                 correlation_id=domain_event.correlation_id,
                             ),
                         )
+                        for audio_message in build_audio_output_chunk_messages(
+                            device_id=domain_event.device_id,
+                            session_id=audio_session_id,
+                            correlation_id=domain_event.correlation_id,
+                            data_base64=result.tts_plan.data_base64,
+                        ):
+                            await connection_manager.send_to_socket(
+                                websocket, audio_message
+                            )
+                            await _pace_audio_output_chunk(audio_message)
+                        if result.audio_output_end:
+                            await connection_manager.send_to_socket(
+                                websocket,
+                                build_audio_output_end_message(
+                                    device_id=domain_event.device_id,
+                                    session_id=audio_session_id,
+                                    interaction_id=result.wake_interaction_id,
+                                    correlation_id=domain_event.correlation_id,
+                                ),
+                            )
 
                 if result.tts_error is not None:
                     await connection_manager.send_to_socket(
@@ -352,19 +367,13 @@ async def _pace_audio_output_chunk(audio_message: object) -> None:
 
 
 def _audio_output_chunk_sleep_seconds(audio_message: object) -> float:
-    encoding = str(getattr(audio_message, "encoding", "")).lower()
-    if encoding not in {"pcm16", "pcm_s16le", "linear16"}:
-        return _AUDIO_OUTPUT_MIN_CHUNK_INTERVAL_SECONDS
-
-    sample_rate_hz = int(getattr(audio_message, "sample_rate_hz", 0) or 0)
-    channels = int(getattr(audio_message, "channels", 0) or 0)
     data_base64 = str(getattr(audio_message, "data_base64", "") or "")
-    if sample_rate_hz <= 0 or channels <= 0 or not data_base64:
+    if not data_base64:
         return _AUDIO_OUTPUT_MIN_CHUNK_INTERVAL_SECONDS
 
     padding = data_base64.count("=")
     decoded_bytes = max(0, (len(data_base64) * 3 // 4) - padding)
-    bytes_per_second = sample_rate_hz * channels * 2
+    bytes_per_second = 24_000 * 1 * 2
     if bytes_per_second <= 0 or decoded_bytes <= 0:
         return _AUDIO_OUTPUT_MIN_CHUNK_INTERVAL_SECONDS
 
@@ -372,4 +381,13 @@ def _audio_output_chunk_sleep_seconds(audio_message: object) -> float:
     return min(
         max(chunk_seconds, _AUDIO_OUTPUT_MIN_CHUNK_INTERVAL_SECONDS),
         _AUDIO_OUTPUT_MAX_CHUNK_INTERVAL_SECONDS,
+    )
+
+
+def _tts_plan_matches_speaker_contract(tts_plan: object) -> bool:
+    encoding = str(getattr(tts_plan, "encoding", "") or "").lower().replace("-", "_")
+    return (
+        encoding in {"pcm16", "pcm_s16le", "linear16", "s16le"}
+        and int(getattr(tts_plan, "sample_rate_hz", 0) or 0) == 24_000
+        and int(getattr(tts_plan, "channels", 0) or 0) == 1
     )

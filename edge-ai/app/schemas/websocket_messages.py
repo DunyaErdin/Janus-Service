@@ -248,18 +248,26 @@ class AudioOutputMessage(MessageBase):
     server_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class AudioOutputStartMessage(MessageBase):
+    message_type: Literal["audio_output_start"] = "audio_output_start"
+    device_id: str = Field(min_length=1, max_length=128)
+    session_id: str = Field(min_length=1, max_length=128)
+    interaction_id: str | None = Field(default=None, max_length=128)
+    sample_rate_hz: int = Field(default=24000, ge=24000, le=24000)
+    channels: int = Field(default=1, ge=1, le=1)
+    sample_format: Literal["s16le"] = "s16le"
+    chunk_size_bytes: int = Field(default=1536, ge=1536, le=1536, multiple_of=2)
+    server_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class AudioOutputChunkMessage(MessageBase):
     message_type: Literal["audio_output_chunk"] = "audio_output_chunk"
     device_id: str = Field(min_length=1, max_length=128)
     session_id: str = Field(min_length=1, max_length=128)
     interaction_id: str | None = Field(default=None, max_length=128)
     chunk_id: int = Field(ge=0)
-    encoding: str = Field(min_length=1, max_length=32)
-    sample_rate_hz: int = Field(ge=8000, le=96000)
-    channels: int = Field(default=1, ge=1, le=2)
     data_base64: str = Field(min_length=1)
     is_final: bool = False
-    mime_type: str | None = Field(default=None, max_length=64)
     server_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -311,6 +319,7 @@ OutgoingDeviceMessage = Annotated[
         AIResponsePlanMessage,
         ErrorMessage,
         AudioOutputMessage,
+        AudioOutputStartMessage,
         AudioOutputChunkMessage,
         AudioOutputEndMessage,
         WakeDetectedMessage,
