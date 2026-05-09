@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     websocket_path: str = "/ws/device"
     allowed_device_ids: str | None = None
     device_auth_token: str | None = None
-    llm_provider: Literal["mock", "gemini"] = "mock"
+    llm_provider: Literal["mock", "gemini", "claude"] = "mock"
     stt_provider: Literal["placeholder", "gemini"] = "gemini"
     tts_provider: Literal["placeholder", "gemini"] = "gemini"
     wake_detector_provider: Literal["stt", "dev_fake", "disabled"] = "stt"
@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     gemini_stt_model_id: str = "gemini-3-flash-preview"
     gemini_tts_model_id: str = "gemini-3.1-flash-tts-preview"
     gemini_tts_voice_name: str = "Kore"
+    anthropic_api_key: str | None = None
+    claude_model_id: str = "claude-haiku-4-5-20251001"
+    claude_max_tokens: int = Field(default=600, ge=64, le=4096)
     debug_audio_token: str | None = None
     request_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
     max_audio_chunks_per_session: int = Field(default=256, ge=16, le=4096)

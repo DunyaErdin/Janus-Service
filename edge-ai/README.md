@@ -140,6 +140,9 @@ These are the currently used runtime settings:
 - `EDGE_AI_GEMINI_STT_MODEL_ID`
 - `EDGE_AI_GEMINI_TTS_MODEL_ID`
 - `EDGE_AI_GEMINI_TTS_VOICE_NAME`
+- `EDGE_AI_ANTHROPIC_API_KEY`
+- `EDGE_AI_CLAUDE_MODEL_ID`
+- `EDGE_AI_CLAUDE_MAX_TOKENS`
 - `EDGE_AI_REQUEST_TIMEOUT_SECONDS`
 - `EDGE_AI_MAX_AUDIO_CHUNKS_PER_SESSION`
 - `EDGE_AI_MAX_WAKE_CHUNKS_PER_INTERACTION`
@@ -217,13 +220,19 @@ curl -X POST http://localhost:8080/debug/response-audio \
 For the first Railway audio MVP use:
 
 ```text
-EDGE_AI_LLM_PROVIDER=mock
+EDGE_AI_LLM_PROVIDER=claude
 EDGE_AI_STT_PROVIDER=gemini
 EDGE_AI_TTS_PROVIDER=gemini
 EDGE_AI_WAKE_DETECTOR_PROVIDER=stt
+EDGE_AI_ANTHROPIC_API_KEY=<anthropic-api-key>
+EDGE_AI_CLAUDE_MODEL_ID=claude-haiku-4-5-20251001
 EDGE_AI_GEMINI_STT_MODEL_ID=gemini-3-flash-preview
 EDGE_AI_GEMINI_TTS_MODEL_ID=gemini-3.1-flash-tts-preview
 ```
+
+Claude covers the response-planning LLM. Speech audio still comes from the
+configured TTS provider, so `EDGE_AI_TTS_PROVIDER=gemini` still needs a Gemini
+key with available TTS quota.
 
 The deployed URL should return this app's JSON shapes from `/health`, `/ready`,
 and `/version` before flashing firmware against its `/ws/device` endpoint.
@@ -325,6 +334,7 @@ Telemetry logging redacts common secret-shaped keys such as token, secret, autho
 - Receive timeout and stale connection cleanup
 - Typed ack and error responses
 - Safe fallback behavior on orchestration or provider failure
+- Claude LLM adapter for response planning
 - Gemini STT adapter for bounded PCM16 microphone chunks
 - Gemini TTS adapter returning PCM16 audio downlink chunks for ESP playback
 

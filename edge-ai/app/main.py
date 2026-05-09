@@ -69,16 +69,41 @@ def create_app() -> FastAPI:
 
     @app.get("/ready", tags=["system"])
     async def readycheck() -> dict[str, str | bool]:
-        providers_configured = (
+        if settings.llm_provider == "gemini":
+            llm_credentials_present = bool(settings.gemini_api_key)
+        elif settings.llm_provider == "claude":
+            llm_credentials_present = bool(settings.anthropic_api_key)
+        else:
+            llm_credentials_present = True
+        stt_credentials_present = (
+            settings.stt_provider == "placeholder" or bool(settings.gemini_api_key)
+        )
+        tts_credentials_present = (
+            settings.tts_provider == "placeholder" or bool(settings.gemini_api_key)
+        )
+        wake_credentials_present = (
             settings.wake_detector_provider == "dev_fake"
             or settings.wake_detector_provider == "disabled"
-            or bool(settings.gemini_api_key)
+            or stt_credentials_present
+        )
+        providers_configured = (
+            llm_credentials_present
+            and stt_credentials_present
+            and tts_credentials_present
+            and wake_credentials_present
         )
         return {
             "status": "ready" if providers_configured else "degraded",
             "service": settings.app_name,
+            "llm_provider": settings.llm_provider,
+            "stt_provider": settings.stt_provider,
+            "tts_provider": settings.tts_provider,
             "wake_detector_provider": settings.wake_detector_provider,
             "provider_credentials_present": providers_configured,
+            "llm_credentials_present": llm_credentials_present,
+            "stt_credentials_present": stt_credentials_present,
+            "tts_credentials_present": tts_credentials_present,
+            "wake_credentials_present": wake_credentials_present,
         }
 
     @app.get("/version", tags=["system"])
