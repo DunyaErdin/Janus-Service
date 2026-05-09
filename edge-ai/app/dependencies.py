@@ -22,6 +22,7 @@ from app.domain.ports.stt_port import SttPort
 from app.domain.ports.telemetry_port import TelemetryPort
 from app.domain.ports.tts_port import TtsPort
 from app.domain.ports.wake_detection_port import WakeDetectionService
+from app.infrastructure.adapters.llm.claude_llm_adapter import ClaudeLlmAdapter
 from app.infrastructure.adapters.llm.gemini_llm_adapter import GeminiLlmAdapter
 from app.infrastructure.adapters.llm.mock_llm_adapter import MockLlmAdapter
 from app.infrastructure.adapters.repositories.in_memory_session_repository import (
@@ -91,6 +92,13 @@ def get_llm_adapter() -> LlmPort:
         return GeminiLlmAdapter(
             api_key=settings.gemini_api_key,
             model_id=settings.gemini_model_id,
+            request_timeout_seconds=settings.request_timeout_seconds,
+        )
+    if settings.llm_provider == "claude":
+        return ClaudeLlmAdapter(
+            api_key=settings.anthropic_api_key,
+            model_id=settings.claude_model_id,
+            max_tokens=settings.claude_max_tokens,
             request_timeout_seconds=settings.request_timeout_seconds,
         )
     return MockLlmAdapter()
