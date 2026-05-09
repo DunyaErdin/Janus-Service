@@ -31,6 +31,8 @@ from app.infrastructure.transport.websocket.protocol import (
 router = APIRouter()
 WEBSOCKET_PATH = get_settings().websocket_path
 logger = logging.getLogger("edge_ai.websocket.route")
+_AUDIO_OUTPUT_MIN_CHUNK_INTERVAL_SECONDS = 0.008
+_AUDIO_OUTPUT_MAX_CHUNK_INTERVAL_SECONDS = 0.040
 
 
 @router.websocket(WEBSOCKET_PATH)
@@ -244,6 +246,7 @@ async def device_websocket(
                         await connection_manager.send_to_socket(
                             websocket, audio_message
                         )
+                        await _pace_audio_output_chunk(audio_message)
                     if result.audio_output_end:
                         await connection_manager.send_to_socket(
                             websocket,
@@ -337,3 +340,36 @@ async def device_websocket(
 def _short_error_message(message: str) -> str:
     normalized = " ".join(message.split()) or "TTS audio generation failed."
     return normalized[:240]
+
+
+async def _pace_audio_output_chunk(audio_message: object) -> None:
+    if getattr(audio_message, "is_final", False):
+        return
+
+    sleep_seconds = _audio_output_chunk_sleep_seconds(audio_message)
+    if sleep_seconds > 0:
+        await asyncio.sleep(sleep_seconds)
+
+
+def _audio_output_chunk_sleep_seconds(audio_message: object) -> float:
+    encoding = str(getattr(audio_message, "encoding", "")).lower()
+    if encoding not in {"pcm16", "pcm_s16le", "linear16"}:
+        return _AUDIO_OUTPUT_MIN_CHUNK_INTERVAL_SECONDS
+
+    sample_rate_hz = int(getattr(audio_message, "sample_rate_hz", 0) or 0)
+    channels = int(getattr(audio_message, "channels", 0) or 0)
+    data_base64 = str(getattr(audio_message, "data_base64", "") or "")
+    if sample_rate_hz <= 0 or channels <= 0 or not data_base64:
+        return _AUDIO_OUTPUT_MIN_CHUNK_INTERVAL_SECONDS
+
+    padding = data_base64.count("=")
+    decoded_bytes = max(0, (len(data_base64) * 3 // 4) - padding)
+    bytes_per_second = sample_rate_hz * channels * 2
+    if bytes_per_second <= 0 or decoded_bytes <= 0:
+        return _AUDIO_OUTPUT_MIN_CHUNK_INTERVAL_SECONDS
+
+    chunk_seconds = decoded_bytes / bytes_per_second
+    return min(
+        max(chunk_seconds, _AUDIO_OUTPUT_MIN_CHUNK_INTERVAL_SECONDS),
+        _AUDIO_OUTPUT_MAX_CHUNK_INTERVAL_SECONDS,
+    )

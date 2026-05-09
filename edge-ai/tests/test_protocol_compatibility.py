@@ -10,6 +10,7 @@ from app.domain.models.device_event import (
     SessionStartEvent,
     WakeAudioChunkEvent,
 )
+from app.api.websocket_routes import _audio_output_chunk_sleep_seconds
 from app.domain.models.touch_context import RawTouchSensor, TouchGesture
 from app.domain.models.ai_response_plan import AIResponsePlan
 from app.domain.models.touch_context import TouchInterpretation
@@ -126,6 +127,21 @@ def test_audio_output_chunk_messages_split_base64_on_safe_boundaries() -> None:
     assert '"is_final":false' in payloads[0]
     assert '"chunk_id":8' in payloads[8]
     assert '"is_final":true' in payloads[8]
+
+
+def test_audio_output_chunk_pacing_tracks_pcm_duration() -> None:
+    message = build_audio_output_chunk_messages(
+        device_id="janus-esp-01",
+        session_id="session-1",
+        correlation_id="corr-4",
+        encoding="pcm16",
+        sample_rate_hz=24000,
+        channels=1,
+        data_base64="A" * 512,
+        mime_type="audio/L16;rate=24000",
+    )[0]
+
+    assert _audio_output_chunk_sleep_seconds(message) == 0.008
 
 
 def test_wake_audio_chunk_shape_is_accepted() -> None:
