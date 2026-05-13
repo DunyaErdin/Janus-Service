@@ -8,7 +8,12 @@ from fastapi import FastAPI
 from app.api.debug_audio_routes import router as debug_audio_router
 from app.api.websocket_routes import router as websocket_router
 from app.config import get_settings
-from app.dependencies import get_connection_manager
+from app.dependencies import (
+    build_provider_matrix,
+    get_connection_manager,
+    get_providers_health,
+    get_tts_health_status,
+)
 from app.logging_config import configure_logging
 
 
@@ -19,32 +24,54 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        matrix = build_provider_matrix(settings)
+
         logger.info(
             "edge_ai_starting",
             extra={
                 "structured": {
                     "environment": settings.environment,
-                    "llm_provider": settings.llm_provider,
-                    "stt_provider": settings.stt_provider,
-                    "tts_provider": settings.tts_provider,
-                    "wake_detector_provider": settings.wake_detector_provider,
                     "websocket_path": settings.websocket_path,
                     "docs_enabled": settings.docs_enabled,
+                    **matrix,
                 }
             },
         )
-        yield
-        await get_connection_manager().close_all(
-            code=1012,
-            reason="server_shutdown",
+
+        # Log provider_matrix as a dedicated event for easy grepping.
+        logger.info(
+            "provider_matrix",
+            extra={"structured": matrix},
         )
+
+        # Warn on missing required credentials so ops sees it at startup.
+        if settings.llm_provider == "claude" and not settings.anthropic_api_key:
+            logger.error(
+                "provider_config_error",
+                extra={
+                    "structured": {
+                        "provider": "claude",
+                        "error": "ANTHROPIC_API_KEY missing — LLM will fail at runtime",
+                    }
+                },
+            )
+        if settings.tts_provider == "openrouter" and not settings.openrouter_api_key:
+            logger.error(
+                "provider_config_error",
+                extra={
+                    "structured": {
+                        "provider": "openrouter_tts",
+                        "error": "OPENROUTER_API_KEY missing — TTS will fall back to cache/error",
+                    }
+                },
+            )
+
+        yield
+
+        await get_connection_manager().close_all(code=1012, reason="server_shutdown")
         logger.info(
             "edge_ai_stopped",
-            extra={
-                "structured": {
-                    "environment": settings.environment,
-                }
-            },
+            extra={"structured": {"environment": settings.environment}},
         )
 
     app = FastAPI(
@@ -68,43 +95,31 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/ready", tags=["system"])
-    async def readycheck() -> dict[str, str | bool]:
-        if settings.llm_provider == "gemini":
-            llm_credentials_present = bool(settings.gemini_api_key)
-        elif settings.llm_provider == "claude":
-            llm_credentials_present = bool(settings.anthropic_api_key)
-        else:
-            llm_credentials_present = True
-        stt_credentials_present = (
-            settings.stt_provider == "placeholder" or bool(settings.gemini_api_key)
+    async def readycheck() -> dict:
+        llm_ok = settings.llm_provider == "mock" or (
+            settings.llm_provider == "claude" and bool(settings.anthropic_api_key)
         )
-        tts_credentials_present = (
-            settings.tts_provider == "placeholder" or bool(settings.gemini_api_key)
+        stt_ok = settings.stt_provider in {"mock", "placeholder"}
+        tts_ok = settings.tts_provider == "placeholder" or (
+            settings.tts_provider == "openrouter" and bool(settings.openrouter_api_key)
         )
-        wake_credentials_present = (
-            settings.wake_detector_provider == "dev_fake"
-            or settings.wake_detector_provider == "disabled"
-            or stt_credentials_present
-        )
-        providers_configured = (
-            llm_credentials_present
-            and stt_credentials_present
-            and tts_credentials_present
-            and wake_credentials_present
-        )
+        all_ok = llm_ok and stt_ok and tts_ok
         return {
-            "status": "ready" if providers_configured else "degraded",
+            "status": "ready" if all_ok else "degraded",
             "service": settings.app_name,
-            "llm_provider": settings.llm_provider,
-            "stt_provider": settings.stt_provider,
-            "tts_provider": settings.tts_provider,
-            "wake_detector_provider": settings.wake_detector_provider,
-            "provider_credentials_present": providers_configured,
-            "llm_credentials_present": llm_credentials_present,
-            "stt_credentials_present": stt_credentials_present,
-            "tts_credentials_present": tts_credentials_present,
-            "wake_credentials_present": wake_credentials_present,
+            **build_provider_matrix(settings),
+            "llm_ready": llm_ok,
+            "stt_ready": stt_ok,
+            "tts_ready": tts_ok,
         }
+
+    @app.get("/health/tts", tags=["system"])
+    async def tts_health() -> dict:
+        return get_tts_health_status()
+
+    @app.get("/health/providers", tags=["system"])
+    async def providers_health() -> dict:
+        return get_providers_health()
 
     @app.get("/version", tags=["system"])
     async def version() -> dict[str, str]:
