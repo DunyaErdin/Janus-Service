@@ -1,0 +1,7 @@
+{
+  "Selam adaş, sesim geliyor mu?": "selam_adas.wav",
+  "Selam adaş, buradayım.": "selam_adas_buradayim.wav",
+  "Bağlantı kuruldu.": "baglanti_kuruldu.wav",
+  "Komutu aldım.": "komutu_aldim.wav",
+  "TTS servisi şu an kullanılamıyor ama sistem çalışıyor.": "tts_fallback.wav"
+}

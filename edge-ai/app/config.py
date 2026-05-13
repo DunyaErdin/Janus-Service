@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +14,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # ── App ──────────────────────────────────────────────────────────────────
     app_name: str = "Janus Edge AI"
     environment: Literal["development", "staging", "production"] = "development"
     log_level: str = "INFO"
@@ -24,22 +25,62 @@ class Settings(BaseSettings):
     forwarded_allow_ips: str = "*"
     robot_name: str = "Janus"
     default_language: str = "tr-TR"
+
+    # ── WebSocket ─────────────────────────────────────────────────────────────
     websocket_path: str = "/ws/device"
     allowed_device_ids: str | None = None
     device_auth_token: str | None = None
-    llm_provider: Literal["mock", "gemini", "claude"] = "mock"
-    stt_provider: Literal["placeholder", "gemini"] = "gemini"
-    tts_provider: Literal["placeholder", "gemini"] = "gemini"
-    wake_detector_provider: Literal["stt", "dev_fake", "disabled"] = "stt"
-    gemini_api_key: str | None = None
-    gemini_model_id: str = "configure-me"
-    gemini_stt_model_id: str = "gemini-3-flash-preview"
-    gemini_tts_model_id: str = "gemini-3.1-flash-tts-preview"
-    gemini_tts_voice_name: str = "Kore"
+    websocket_hello_timeout_seconds: float = Field(default=10.0, gt=1.0, le=120.0)
+    websocket_receive_timeout_seconds: float = Field(default=90.0, gt=5.0, le=3600.0)
+    websocket_close_timeout_seconds: float = Field(default=2.0, gt=0.1, le=10.0)
+    websocket_max_protocol_errors: int = Field(default=3, ge=1, le=10)
+    websocket_max_message_bytes: int = Field(default=1_048_576, ge=1024, le=16_777_216)
+    websocket_ping_interval_seconds: float = Field(default=20.0, gt=0.0, le=300.0)
+    websocket_ping_timeout_seconds: float = Field(default=20.0, gt=0.0, le=300.0)
+
+    # ── Provider selection ────────────────────────────────────────────────────
+    llm_provider: Literal["mock", "gemini", "claude"] = "claude"
+    # "mock" and "placeholder" are both accepted for stt; both map to PlaceholderSttAdapter
+    stt_provider: Literal["placeholder", "mock", "gemini"] = "mock"
+    # "chained" is removed from the public API; use "openrouter" — chain is built internally
+    tts_provider: Literal["placeholder", "gemini", "openai", "openrouter"] = "openrouter"
+    wake_detector_provider: Literal["stt", "dev_fake", "disabled"] = "dev_fake"
+
+    # ── Provider enable guards ────────────────────────────────────────────────
+    gemini_enabled: bool = False
+    openai_enabled: bool = False
+
+    # ── Claude / Anthropic ────────────────────────────────────────────────────
     anthropic_api_key: str | None = None
     claude_model_id: str = "claude-haiku-4-5-20251001"
     claude_max_tokens: int = Field(default=600, ge=64, le=4096)
-    debug_audio_token: str | None = None
+
+    # ── OpenRouter TTS ────────────────────────────────────────────────────────
+    openrouter_api_key: str | None = None
+    openrouter_tts_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_tts_model: str = "openai/gpt-4o-mini-tts-2025-12-15"
+    openrouter_tts_voice: str = "coral"
+    openrouter_tts_speed: float = Field(default=1.0, gt=0.0, le=4.0)
+    openrouter_http_referer: str | None = None
+    openrouter_app_title: str | None = None
+
+    # ── TTS cache ─────────────────────────────────────────────────────────────
+    tts_cache_first: bool = True
+    tts_cache_dir: str = "data/tts_cache"
+
+    # ── Gemini (disabled by default) ──────────────────────────────────────────
+    gemini_api_key: str | None = None
+    gemini_model_id: str = "gemini-2.5-flash"
+    gemini_stt_model_id: str = "gemini-3-flash-preview"
+    gemini_tts_model_id: str = "gemini-3.1-flash-tts-preview"
+    gemini_tts_voice_name: str = "Kore"
+
+    # ── Native OpenAI (disabled by default) ──────────────────────────────────
+    openai_api_key: str | None = None
+    openai_tts_model: str = "tts-1"
+    openai_tts_voice: str = "alloy"
+
+    # ── Session / audio limits ────────────────────────────────────────────────
     request_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
     max_audio_chunks_per_session: int = Field(default=256, ge=16, le=4096)
     max_wake_chunks_per_interaction: int = Field(default=24, ge=1, le=128)
@@ -48,13 +89,34 @@ class Settings(BaseSettings):
     )
     debug_store_raw_wake_audio: bool = False
     session_history_limit: int = Field(default=20, ge=4, le=100)
-    websocket_hello_timeout_seconds: float = Field(default=10.0, gt=1.0, le=120.0)
-    websocket_receive_timeout_seconds: float = Field(default=90.0, gt=5.0, le=3600.0)
-    websocket_close_timeout_seconds: float = Field(default=2.0, gt=0.1, le=10.0)
-    websocket_max_protocol_errors: int = Field(default=3, ge=1, le=10)
-    websocket_max_message_bytes: int = Field(default=1_048_576, ge=1024, le=16_777_216)
-    websocket_ping_interval_seconds: float = Field(default=20.0, gt=0.0, le=300.0)
-    websocket_ping_timeout_seconds: float = Field(default=20.0, gt=0.0, le=300.0)
+
+    # ── Debug ─────────────────────────────────────────────────────────────────
+    debug_audio_token: str | None = None
+
+    # ── Provider guard validation ─────────────────────────────────────────────
+
+    @model_validator(mode="after")
+    def _validate_provider_guards(self) -> Settings:
+        if not self.gemini_enabled:
+            if self.llm_provider == "gemini":
+                raise ValueError(
+                    "LLM_PROVIDER=gemini requires EDGE_AI_GEMINI_ENABLED=true"
+                )
+            if self.stt_provider == "gemini":
+                raise ValueError(
+                    "STT_PROVIDER=gemini requires EDGE_AI_GEMINI_ENABLED=true"
+                )
+            if self.tts_provider == "gemini":
+                raise ValueError(
+                    "TTS_PROVIDER=gemini requires EDGE_AI_GEMINI_ENABLED=true"
+                )
+        if not self.openai_enabled and self.tts_provider == "openai":
+            raise ValueError(
+                "TTS_PROVIDER=openai requires EDGE_AI_OPENAI_ENABLED=true"
+            )
+        return self
+
+    # ── Computed properties ───────────────────────────────────────────────────
 
     @property
     def allowed_device_id_set(self) -> set[str]:
@@ -65,12 +127,20 @@ class Settings(BaseSettings):
         }
 
     def is_device_allowed(self, device_id: str) -> bool:
-        allowed_device_ids = self.allowed_device_id_set
-        return not allowed_device_ids or device_id in allowed_device_ids
+        allowed = self.allowed_device_id_set
+        return not allowed or device_id in allowed
 
     @property
     def docs_enabled(self) -> bool:
         return self.environment != "production"
+
+    @property
+    def anthropic_configured(self) -> bool:
+        return bool(self.anthropic_api_key) and self.llm_provider == "claude"
+
+    @property
+    def openrouter_configured(self) -> bool:
+        return bool(self.openrouter_api_key) and self.tts_provider == "openrouter"
 
 
 @lru_cache

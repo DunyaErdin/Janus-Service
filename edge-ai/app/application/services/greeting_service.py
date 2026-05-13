@@ -30,11 +30,7 @@ class GreetingService:
         if requested_text.strip() == GOLDEN_PCM_SINE_REQUEST_TEXT:
             return _build_golden_pcm_sine(interaction_id)
 
-        text = (
-            GREETING_TEXT
-            if requested_text.strip() != GREETING_TEXT
-            else requested_text.strip()
-        )
+        text = requested_text.strip() or GREETING_TEXT
         plan = await self._tts.plan_synthesis(
             TtsSynthesisRequest(
                 device_id=device_id,
