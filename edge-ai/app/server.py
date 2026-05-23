@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import uvicorn
 
 from app.config import get_settings
@@ -7,10 +9,11 @@ from app.config import get_settings
 
 def main() -> None:
     settings = get_settings()
+    port = int(os.getenv("PORT") or settings.server_port)
     uvicorn.run(
         "app.main:app",
         host=settings.server_host,
-        port=settings.server_port,
+        port=port,
         log_level=settings.log_level.lower(),
         log_config=None,
         proxy_headers=settings.proxy_headers,

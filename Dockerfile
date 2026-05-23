@@ -9,8 +9,8 @@ WORKDIR /app
 
 RUN addgroup --system janus && adduser --system --ingroup janus janus
 
-COPY pyproject.toml README.md ./
-COPY app ./app
+COPY edge-ai/pyproject.toml edge-ai/README.md ./
+COPY edge-ai/app ./app
 
 RUN pip install --upgrade pip && pip install .
 
